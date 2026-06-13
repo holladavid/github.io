@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retro Scene Music-Disk</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Retro Fonts laden -->
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+</head>
+<body class="theme-c64"> <!-- Start-Theme ist C64 -->
+
+    <!-- Boot Screen: Notwendig für Web Audio API Start -->
+    <div id="boot-screen">
+        <h1 class="blink">[ INSERT DISK AND CLICK TO START ]</h1>
+    </div>
+
+    <!-- Haupt-Demo-Interface (anfangs versteckt) -->
+    <div id="demo-container" class="hidden">
+        
+        <!-- ZONE 1: Das Spektakel (40% Höhe) -->
+        <div id="visual-zone">
+            <canvas id="demo-canvas"></canvas>
+            <div class="scanlines"></div> <!-- CRT Monitor Effekt -->
+        </div>
+
+        <!-- ZONE 2 & 3: Player und Museum (50% Höhe) -->
+        <div id="ui-zone">
+            
+            <!-- Linke Spalte: Player & Tracklist -->
+            <div id="player-panel">
+                <div class="system-tabs">
+                    <button class="tab-btn active" onclick="setTheme('theme-c64')">C64</button>
+                    <button class="tab-btn" onclick="setTheme('theme-amiga')">AMIGA</button>
+                    <button class="tab-btn" onclick="setTheme('theme-atari')">ATARI ST</button>
+                </div>
+                
+                <ul id="tracklist">
+
+                    <!-- Die anderen Tracks werden später dynamisch per JS geladen -->
+                </ul>
+                
+                <div class="controls">
+                    <button id="btn-prev">⏮</button>
+                    <button id="btn-play">▶ / ⏸</button>
+                    <button id="btn-next">⏭</button>
+                </div>
+            </div>
+
+            <!-- Rechte Spalte: Museum / Info -->
+            <div id="museum-panel">
+                <div class="museum-header">
+                    <h2>>>> INFO: MOS Technology SID 6581</h2>
+                </div>
+                <div class="museum-content" id="info-text">
+                    <p>Der Sound Interface Device (SID) wurde von Bob Yannes entwickelt. Er ist kein simpler "Piepser", sondern ein vollwertiger, subtraktiver Synthesizer auf einem Chip.</p>
+                    <p><strong>Aktueller Composer: Rob Hubbard</strong><br>
+                    Der Brite Rob Hubbard gilt als der Vater der C64-Musik. Er meisterte die Pulsweitenmodulation (PWM) und kreierte "wabernde", extrem fette Basslines.</p>
+                    <p class="blinking-cursor">_</p>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- ZONE 4: Der Sinus-Scroller (10% Höhe) -->
+        <div id="scroller-zone">
+            <canvas id="scroller-canvas"></canvas>
+        </div>
+
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

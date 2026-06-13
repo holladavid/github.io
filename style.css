@@ -1,0 +1,226 @@
+/* Globale Variablen für dynamisches Theming */
+:root {
+    /* Standard: C64 Theme */
+    --bg-color: #352879;      /* C64 Dunkelblau */
+    --fg-color: #6c5eb5;      /* C64 Hellblau */
+    --text-color: #6c5eb5;
+    --highlight-color: #ffffff;
+    --font-main: 'Press Start 2P', monospace;
+    --font-size-base: 10px;
+}
+
+body.theme-amiga {
+    --bg-color: #000000;      /* Workbench Rand */
+    --fg-color: #0055aa;      /* Amiga Blau */
+    --text-color: #ffffff;
+    --highlight-color: #ff8800; /* Amiga Orange */
+    --font-main: 'VT323', monospace;
+    --font-size-base: 18px;
+}
+
+body.theme-atari {
+    --bg-color: #000000;      /* Atari ST Monochrom */
+    --fg-color: #222222;
+    --text-color: #55ff55;    /* Atari Grün */
+    --highlight-color: #ffffff;
+    --font-main: 'VT323', monospace;
+    --font-size-base: 20px;
+}
+
+/* Reset & Basis-Setup */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body, html {
+    width: 100%;
+    height: 100%;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-family: var(--font-main);
+    overflow: hidden; /* Keine Scrollbalken erlaubt in einer Demo! */
+    transition: background-color 0.5s, color 0.5s;
+}
+
+/* --- BOOT SCREEN --- */
+#boot-screen {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    background-color: #000;
+    color: #fff;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.blink {
+    animation: blinker 1s linear infinite;
+}
+@keyframes blinker {
+    50% { opacity: 0; }
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* --- HAUPT LAYOUT --- */
+#demo-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+/* 1. VISUAL ZONE (Canvas) */
+#visual-zone {
+    height: 40vh;
+    position: relative;
+    background-color: #000;
+    border-bottom: 4px solid var(--text-color);
+}
+#demo-canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+/* Scanlines für Retro CRT Feeling */
+.scanlines {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+    background-size: 100% 4px, 3px 100%;
+    pointer-events: none;
+}
+
+/* 2. UI ZONE (Player + Museum) */
+#ui-zone {
+    height: 50vh;
+    display: flex;
+    background-color: var(--bg-color);
+    padding: 20px;
+    gap: 20px;
+}
+
+/* Linke Spalte: Player */
+#player-panel {
+    flex: 0 0 35%;
+    display: flex;
+    color: var(--bg-color); /* Schrift dunkelblau auf hellblauem Grund */
+    flex-direction: column;
+    border: 2px solid var(--text-color);
+    background-color: var(--fg-color);
+    padding: 10px;
+}
+
+.system-tabs {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 15px;
+}
+
+.tab-btn {
+    background: var(--bg-color);
+    color: var(--text-color);
+    border: 2px solid var(--text-color);
+    padding: 5px 10px;
+    font-family: var(--font-main);
+    font-size: var(--font-size-base);
+    cursor: pointer;
+}
+
+.tab-btn.active, .tab-btn:hover {
+    background: var(--text-color);
+    color: var(--bg-color);
+}
+
+#tracklist {
+    list-style: none;
+    flex-grow: 1;
+    overflow-y: auto;
+    font-size: var(--font-size-base);
+    line-height: 1.8;
+}
+
+#tracklist li {
+    cursor: pointer;
+    padding: 2px 5px;
+    color: var(--bg-color); 
+}
+
+#tracklist li:hover {
+    background: var(--bg-color); /* Bei Hover: Hintergrund dunkel... */
+    color: var(--fg-color);      /* ...und Schrift hell */
+}
+
+.active-track {
+    background: var(--highlight-color);
+    color: var(--bg-color) !important;
+    animation: blinker 2s infinite;
+}
+
+.controls {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    margin-top: 10px;
+}
+
+.controls button {
+    background: none;
+    border: 2px solid var(--text-color);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 5px 10px;
+    color: var(--bg-color);
+    border-color: var(--bg-color);
+}
+/* Rechte Spalte: Museum */
+#museum-panel {
+    flex: 1;
+    border: 2px solid var(--text-color);
+    background-color: var(--bg-color);
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+}
+
+.museum-header h2 {
+    font-size: calc(var(--font-size-base) * 1.2);
+    margin-bottom: 15px;
+    border-bottom: 2px dashed var(--text-color);
+    padding-bottom: 5px;
+    color: var(--highlight-color);
+}
+
+.museum-content {
+    font-size: var(--font-size-base);
+    line-height: 1.5;
+    overflow-y: auto;
+}
+
+.museum-content p {
+    margin-bottom: 15px;
+}
+
+.blinking-cursor {
+    display: inline-block;
+    width: 10px;
+    background-color: var(--text-color);
+    animation: blinker 1s step-end infinite;
+}
+
+/* 3. SCROLLER ZONE */
+#scroller-zone {
+    height: 10vh;
+    background-color: #000;
+    border-top: 4px solid var(--text-color);
+}
+#scroller-canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
