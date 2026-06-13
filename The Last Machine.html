@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Assembly Winner - True SID Synthesis Edition</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background-color: #000; overflow: hidden; font-family: 'Press Start 2P', monospace; user-select: none; cursor: default; }
+        #canvas-container { position: relative; width: 100vw; height: 100vh; }
+        canvas { display: block; width: 100%; height: 100%; }
+        .crt-overlay {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 10;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            background-size: 100% 4px, 3px 100%; box-shadow: inset 0 0 100px rgba(0,0,0,0.95);
+        }
+        .scanlines { animation: scroll 10s linear infinite; }
+        @keyframes scroll { 0% { background-position: 0 0; } 100% { background-position: 0 100vh; } }
+        #instruction { position: absolute; bottom: 20px; width: 100%; text-align: center; color: rgba(255,255,255,0.4); font-size: 12px; z-index: 20; text-shadow: 2px 2px 0 #000; letter-spacing: 2px; transition: opacity 1s; }
+    </style>
+</head>
+<body>
+
+<div id="instruction">INITIALIZE HARDWARE: CLICK TO BEGIN / ESC TO RETURN</div>
+<div class="crt-overlay scanlines"></div>
+<div id="canvas-container"><canvas id="screen"></canvas></div>
+
+<script>
+/**
+ * ---------------------------------------------------------
+ * DEMOSCENE ENGINE vFINAL (TRUE SID SYNTHESIS EDITION)
+ * 100% Procedural Hardware Simulation & 15 Visual Effects
+ * ---------------------------------------------------------
+ */
+const canvas = document.getElementById('screen');
+const ctx = canvas.getContext('2d');
+let w, h, state = 'MENU', t = 0;
+let mouseX = 0, mouseY = 0, beatPulse = 0;
+
+const mtf = (note) => note ? 440 * Math.pow(2, (note - 69) / 12) : 0;
+const e0 = new Array(32).fill(0); 
+
+// --- BARE METAL AUDIO ENGINE ---
+const AudioEngine = (function() {
+    let actx, activeSystem = null, timerID;
+    let nextNoteTime = 0, currentStep = 0, currentOrder = 0;
+    
+    // Hardware Emulation Nodes
+    let amigaDelay, amigaFeedback, amigaFilter;
+    let ymBitcrusher;
+    let clipperCurve; // For True SID PWM
+    let noiseBuffer;  // Shared noise for SID & YM
+    let paulaSamples = {};
+
+    // --- TRACK 1: C64 (SID) - True PWM & Aggressive Arr. ---
+    const songC64 = {
+        speed: 0.105, 
+        orders: [0, 1, 2, 3, 4, 5, 2, 6, 7, 8, 4, 5, 9, 0], 
+        visuals: [0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 1, 2, 0],
+        patterns: [
+            { // 0: Dark Intro
+                bass: [36,0,36,0,36,36,36,0, 32,0,32,0,32,32,32,0, 39,0,39,0,39,39,39,0, 34,0,34,0,34,34,34,0],
+                drums:[1,0,0,0,2,0,0,0, 1,0,0,0,2,0,0,0, 1,0,0,0,2,0,0,0, 1,0,0,0,2,0,0,0], arp: e0, lead: e0 
+            },
+            { // 1: Arp Build
+                bass: [36,0,36,0,36,36,36,0, 32,0,32,0,32,32,32,0, 39,0,39,0,39,39,39,0, 34,0,34,0,34,34,34,0],
+                drums:[1,0,0,0,2,0,0,0, 1,0,1,0,2,0,0,0, 1,0,0,0,2,0,0,0, 1,0,1,0,2,0,0,0],
+                arp:  [[60,63,67],0,[60,63,67],0,[60,63,67],0,[60,63,67],0, [56,60,63],0,[56,60,63],0,[56,60,63],0,[56,60,63],0, [63,67,70],0,[63,67,70],0,[63,67,70],0,[63,67,70],0, [58,62,65],0,[58,62,65],0,[58,62,65],0,[58,62,65],0], lead: e0 
+            },
+            { // 2: Main Hook
+                bass: [36,0,36,0,36,36,36,0, 32,0,32,0,32,32,32,0, 39,0,39,0,39,39,39,0, 34,0,34,0,34,34,34,0],
+                drums:[1,0,0,0,2,0,0,0, 1,0,1,0,2,0,0,0, 1,0,0,0,2,0,0,0, 1,0,1,0,2,0,0,0],
+                arp:  [[60,63,67],0,[60,63,67],0,[60,63,67],0,[60,63,67],0, [56,60,63],0,[56,60,63],0,[56,60,63],0,[56,60,63],0, [63,67,70],0,[63,67,70],0,[63,67,70],0,[63,67,70],0, [58,62,65],0,[58,62,65],0,[58,62,65],0,[58,62,65],0], 
+                lead: [60,0,63,0,67,0,0,63, 60,0,0,0,0,0,0,0, 67,0,70,0,75,0,0,70, 65,0,0,0,0,0,0,0] 
+            },
+            { // 3: Pumping Bridge
+                bass: [36,36,36,36,36,36,36,36, 32,32,32,32,32,32,32,32, 39,39,39,39,39,39,39,39, 34,34,34,34,34,34,34,34],
+                drums:[1,0,0,0,2,0,0,0, 1,0,0,0,2,0,0,0, 1,0,0,0,2,0,0,0, 1,0,1,0,2,2,2,2],
+                arp:  [[60,63,67],0,[60,63,67],0,[60,63,67],0,[60,63,67],0, [56,60,63],0,[56,60,63],0,[56,60,63],0,[56,60,63],0, [63,67,70],0,[63,67,70],0,[63,67,70],0,[63,67,70],0, [58,62,65],0,[58,62,65],0,[58,62,65],0,[58,62,65],0], 
+                lead: [72,0,75,0,79,0,0,75, 72,0,0,0,0,0,0,0, 79,0,82,0,87,0,0,82, 77,0,0,0,0,0,0,0] 
+            },
+            { // 4: The Epic Chorus
+                bass: [48,0,48,0,48,0,48,0, 44,0,44,0,44,0,44,0, 51,0,51,0,51,0,51,0, 46,0,46,0,46,0,46,0],
+                drums:[1,0,2,0,1,0,2,0, 1,0,2,0,1,0,2,0, 1,0,2,0,1,0,2,0, 1,0,2,0,1,1,2,2],
+                arp:  [[72,75,79],0,[72,75,79],0,[72,75,79],0,[72,75,79],0, [68,72,75],0,[68,72,75],0,[68,72,75],0,[68,72,75],0, [75,79,82],0,[75,79,82],0,[75,79,82],0,[75,79,82],0, [70,74,77],0,[70,74,77],0,[70,74,77],0,[70,74,77],0], 
+                lead: [84,0,0,84,0,82,0,79, 75,0,0,0,0,0,0,0, 87,0,0,87,0,84,0,82, 77,0,0,0,0,0,0,0] 
+            },
+            { // 5: Apotheosis (Maximum Drive)
+                bass: [48,48,48,48,48,48,48,48, 44,44,44,44,44,44,44,44, 51,51,51,51,51,51,51,51, 46,46,46,46,46,46,46,46],
+                drums:[1,2,1,2,1,2,1,2, 1,2,1,2,1,2,1,2, 1,2,1,2,1,2,1,2, 1,2,1,2,1,2,1,2], 
+                arp:  [[72,75,79],0,[72,75,79],0,[72,75,79],0,[72,75,79],0, [68,72,75],0,[68,72,75],0,[68,72,75],0,[68,72,75],0, [75,79,82],0,[75,79,82],0,[75,79,82],0,[75,79,82],0, [70,74,77],0,[70,74,77],0,[70,74,77],0,[70,74,77],0], 
+                lead: [84,0,82,0,79,0,82,0, 84,0,82,0,79,0,82,0, 87,0,84,0,82,0,84,0, 87,0,84,0,82,0,84,0] 
+            },
+            { // 6: Arp Solo Build
+                bass: [36,36,36,36,36,36,36,36, 36,36,36,36,36,36,36,36, 36,36,36,36,36,36,36,36, 36,36,36,36,36,36,36,36],
+                drums:[1,0,0,0,2,0,0,0, 1,0,0,0,2,0,0,0, 1,0,0,0,2,0,0,0, 1,0,0,0,2,1,2,1],
+                arp:  [[72,75,79],0,[72,75,79],0,[72,75,79],0,[72,75,79],0, [75,79,82],0,[75,79,82],0,[75,79,82],0,[75,79,82],0, [79,82,86],0,[79,82,86],0,[79,82,86],0,[79,82,86],0, [84,87,91],0,[84,87,91],0,[84,87,91],0,[84,87,91],0], lead: e0 
+            },
+            { // 7: Arp Solo Climax
+                bass: [36,0,36,0,36,0,36,0, 36,0,36,0,36,0,36,0, 36,0,36,0,36,0,36,0, 36,0,36,0,36,0,36,0],
+                drums:[1,0,0,0,2,0,0,0, 1,0,0,0,2,0,0,0, 1,0,0,0,2,0,0,0, 1,0,0,0,2,0,0,0],
+                arp: e0, lead: [84,0,82,0,79,0,75,0, 72,0,0,0,0,0,0,0, 91,0,87,0,84,0,79,0, 75,0,0,0,0,0,0,0] 
+            },
+            { // 8: Drop preparation
+                bass: [36,36,36,36,36,36,36,36, 36,36,36,36,36,36,36,36, 36,36,36,36,36,36,36,36, 36,36,36,36,36,36,36,36],
+                drums:[1,0,0,0,2,0,0,0, 1,0,0,0,2,0,0,0, 1,0,0,0,2,0,0,0, 1,1,1,1,2,2,2,2],
+                arp:  [[60,63,67],0,[60,63,67],0,[60,63,67],0,[60,63,67],0, [63,67,70],0,[63,67,70],0,[63,67,70],0,[63,67,70],0, [67,70,75],0,[67,70,75],0,[67,70,75],0,[67,70,75],0, [70,74,79],0,[70,74,79],0,[70,74,79],0,[70,74,79],0], 
+                lead: [84,84,82,82,79,79,75,75, 72,0,0,0,0,0,0,0, 91,91,87,87,84,84,79,79, 75,0,0,0,0,0,0,0] 
+            },
+            { // 9: Breakdown End
+                bass: [24,0,0,0,0,0,0,0, 24,0,0,0,0,0,0,0, 24,0,0,0,0,0,0,0, 24,0,0,0,0,0,0,0],
+                drums:[1,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 1,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0], arp: e0, lead: e0 
+            }
+        ]
+    };
+
+    // --- TRACK 2: ATARI ST (YM) ---
+    const songST = {
+        speed: 0.10, orders: [0, 1, 2, 3, 4, 3, 5, 6, 7, 8, 5, 2, 3, 9], visuals: [0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 1, 0, 0],
+        patterns: [
+            { bass: [33,0,33,0, 33,0,21,0, 33,0,33,0, 21,0,33,0, 29,0,29,0, 29,0,17,0, 29,0,29,0, 17,0,29,0], lead1: e0, drums: [1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0, 1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0], arp: e0 },
+            { bass: [33,0,33,0, 33,0,21,0, 33,0,33,0, 21,0,33,0, 29,0,29,0, 29,0,17,0, 29,0,29,0, 17,0,29,0], lead1: [69,0,0,0, 76,0,0,0, 81,0,0,0, 76,0,0,0, 65,0,0,0, 72,0,0,0, 77,0,0,0, 72,0,0,0], drums: [1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0, 1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0], arp: e0 },
+            { bass: [33,0,33,0, 33,0,21,0, 33,0,33,0, 21,0,33,0, 36,0,36,0, 36,0,24,0, 36,0,36,0, 24,0,36,0], lead1: [81,0,0,0, 88,0,0,0, 93,0,0,0, 88,0,0,0, 84,0,0,0, 91,0,0,0, 96,0,0,0, 91,0,0,0], drums: [1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0, 1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,2], arp: [[69,72,76],0,[69,72,76],0,[69,72,76],0,[69,72,76],0, [69,72,76],0,[69,72,76],0,[69,72,76],0,[69,72,76],0, [72,76,79],0,[72,76,79],0,[72,76,79],0,[72,76,79],0, [72,76,79],0,[72,76,79],0,[72,76,79],0,[72,76,79],0] },
+            { bass: [29,0,29,0, 29,0,17,0, 29,0,29,0, 17,0,29,0, 28,0,28,0, 28,0,16,0, 28,0,28,0, 16,0,28,0], lead1: [77,0,72,0, 69,0,0,0, 77,0,72,0, 69,0,0,0, 76,0,71,0, 68,0,0,0, 76,0,71,0, 68,0,0,0], drums: [1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0, 1,0,0,0, 2,0,0,0, 1,0,1,0, 2,1,2,1], arp: [[65,69,72],0,[65,69,72],0,[65,69,72],0,[65,69,72],0, [65,69,72],0,[65,69,72],0,[65,69,72],0,[65,69,72],0, [64,68,71],0,[64,68,71],0,[64,68,71],0,[64,68,71],0, [64,68,71],0,[64,68,71],0,[64,68,71],0,[64,68,71],0] },
+            { bass: [33,33,21,33, 0,21,33,0, 33,33,21,33, 0,21,33,0, 29,29,17,29, 0,17,29,0, 29,29,17,29, 0,17,29,0], lead1: [81,76,72,69, 72,76,81,84, 81,76,72,69, 72,76,81,84, 77,72,69,65, 69,72,77,81, 77,72,69,65, 69,72,77,81], drums: [1,2,1,2, 1,2,1,2, 1,2,1,2, 1,2,1,2, 1,2,1,2, 1,2,1,2, 1,2,1,2, 1,2,1,2], arp: e0 },
+            { bass: [33,0,0,0, 33,0,0,0, 33,0,0,0, 33,0,0,0, 29,0,0,0, 29,0,0,0, 29,0,0,0, 29,0,0,0], lead1: [81,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 77,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0], drums: [1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0, 1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0], arp: [[69,72,76],0,0,0,[69,72,76],0,0,0,[69,72,76],0,0,0,[69,72,76],0,0,0, [65,69,72],0,0,0,[65,69,72],0,0,0,[65,69,72],0,0,0,[65,69,72],0,0,0] },
+            { bass: [33,33,33,33, 33,33,33,33, 33,33,33,33, 33,33,33,33, 29,29,29,29, 29,29,29,29, 29,29,29,29, 29,29,29,29], lead1: e0, drums: [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1], arp: [[69,72,76],0,[69,72,76],0,[69,72,76],0,[69,72,76],0, [69,72,76],0,[69,72,76],0,[69,72,76],0,[69,72,76],0, [65,69,72],0,[65,69,72],0,[65,69,72],0,[65,69,72],0, [65,69,72],0,[65,69,72],0,[65,69,72],0,[65,69,72],0] },
+            { bass: [33,0,33,0, 21,0,33,0, 33,0,33,0, 21,0,33,0, 36,0,36,0, 24,0,36,0, 36,0,36,0, 24,0,36,0], lead1: e0, drums: [1,0,2,0, 1,0,2,0, 1,0,2,0, 1,0,2,0, 1,0,2,0, 1,0,2,0, 1,0,2,0, 1,0,2,0], arp: [[81,84,88],0,[81,84,88],0,[81,84,88],0,[81,84,88],0, [81,84,88],0,[81,84,88],0,[81,84,88],0,[81,84,88],0, [84,88,93],0,[84,88,93],0,[84,88,93],0,[84,88,93],0, [84,88,93],0,[84,88,93],0,[84,88,93],0,[84,88,93],0] },
+            { bass: [29,0,29,0, 17,0,29,0, 29,0,29,0, 17,0,29,0, 28,0,28,0, 16,0,28,0, 28,0,28,0, 16,0,28,0], lead1: e0, drums: [1,0,2,0, 1,0,2,0, 1,0,2,0, 1,0,2,0, 1,0,2,0, 1,0,2,0, 1,0,2,0, 1,1,2,2], arp: [[77,81,84],0,[77,81,84],0,[77,81,84],0,[77,81,84],0, [77,81,84],0,[77,81,84],0,[77,81,84],0,[77,81,84],0, [76,79,83],0,[76,79,83],0,[76,79,83],0,[76,79,83],0, [76,79,83],0,[76,79,83],0,[76,79,83],0,[76,79,83],0] },
+            { bass: [21,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0], lead1: e0, drums: [1,0,0,0,0,0,0,0], arp: e0 }
+        ]
+    };
+
+    // --- TRACK 3: AMIGA (Paula) ---
+    const songAmiga = {
+        speed: 0.115, orders: [0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 8, 9, 2, 3, 1, 0], visuals: [0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 2, 1, 0, 0, 0],
+        patterns: [
+            { bass: [31,0,0,31, 0,31,43,0, 31,0,0,31, 0,31,43,0, 26,0,0,26, 0,26,38,0, 26,0,0,26, 0,26,38,0], chord: e0, lead: e0, drums:[1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0, 1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0] },
+            { bass: [31,0,0,31, 0,31,43,0, 31,0,0,31, 0,31,43,0, 26,0,0,26, 0,26,38,0, 26,0,0,26, 0,26,38,0], chord:[[55,58,62,65],0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, [50,53,57,60],0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0], lead: e0, drums:[1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0, 1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,1] },
+            { bass: [31,0,0,31, 0,31,43,0, 31,0,0,31, 0,31,43,0, 33,0,0,33, 0,33,45,0, 33,0,0,33, 0,33,45,0], chord:[[55,58,62,65],0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, [57,60,64,67],0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0], lead: [67,0,0,0, 0,0,70,0, 74,0,0,0, 0,0,0,0, 79,0,0,0, 74,0,0,0, 70,0,0,0, 0,0,0,0], drums:[1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0, 1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0] },
+            { bass: [31,0,0,31, 0,31,43,0, 31,0,0,31, 0,31,43,0, 26,0,0,26, 0,26,38,0, 26,0,0,26, 0,26,38,0], chord:[[55,58,62,65],0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, [50,53,57,60],0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0], lead: [67,0,0,0, 0,0,70,0, 74,0,0,0, 0,0,0,0, 72,0,0,0, 69,0,0,0, 65,0,0,0, 0,0,0,0], drums:[1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0, 1,0,0,0, 2,0,0,0, 1,0,1,0, 2,1,2,1] },
+            { bass: [31,0,0,31, 0,31,43,0, 31,0,0,31, 0,31,43,0, 33,0,0,33, 0,33,45,0, 33,0,0,33, 0,33,45,0], chord:[[55,58,62,65],0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, [57,60,64,67],0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0], lead: [67,0,0,70, 0,0,74,0, 79,0,0,74, 0,0,70,0, 69,0,0,72, 0,0,76,0, 81,0,0,76, 0,0,72,0], drums:[1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0, 1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0] },
+            { bass: [31,0,0,31, 0,31,43,0, 31,0,0,31, 0,31,43,0, 36,0,0,36, 0,36,48,0, 36,0,0,36, 0,36,48,0], chord:[[55,58,62,65],0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, [60,64,67,70],0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0], lead: [67,0,0,70, 0,0,74,0, 79,0,0,74, 0,0,70,0, 72,0,0,76, 0,0,79,0, 84,0,0,79, 0,0,76,0], drums:[1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0, 1,0,0,0, 2,0,0,0, 1,0,1,0, 2,1,2,1] },
+            { bass: [31,0,31,0, 31,0,31,0, 31,0,31,0, 31,0,31,0, 26,0,26,0, 26,0,26,0, 26,0,26,0, 26,0,26,0], chord: e0, lead: [67,70,74,79, 74,70,67,70, 67,70,74,79, 74,70,67,70, 69,72,76,81, 76,72,69,72, 69,72,76,81, 76,72,69,72], drums:[1,0,0,0, 2,0,0,0, 1,0,0,0, 2,0,0,0, 1,0,0,0, 2,0,0,0, 1,0,0,0, 2,0,0,0] },
+            { bass: [31,0,31,0, 31,0,31,0, 31,0,31,0, 31,0,31,0, 33,0,33,0, 33,0,33,0, 33,0,33,0, 33,0,33,0], chord: e0, lead: [67,70,74,79, 81,79,74,70, 67,70,74,79, 81,79,74,70, 69,72,76,81, 84,81,76,72, 69,72,76,81, 84,81,76,72], drums:[1,0,0,0, 2,0,0,0, 1,0,0,0, 2,0,0,0, 1,0,0,0, 2,0,0,0, 1,1,1,1, 2,2,2,2] },
+            { bass: [38,0,0,38, 0,38,50,0, 38,0,0,38, 0,38,50,0, 36,0,0,36, 0,36,48,0, 36,0,0,36, 0,36,48,0], chord:[[62,65,69,72],0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, [60,64,67,70],0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0], lead: [86,0,0,0, 0,0,0,0, 81,0,0,0, 0,0,0,0, 84,0,0,0, 0,0,0,0, 79,0,0,0, 0,0,0,0], drums:[1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0, 1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0] },
+            { bass: [38,0,0,38, 0,38,50,0, 38,0,0,38, 0,38,50,0, 34,0,0,34, 0,34,46,0, 34,0,0,34, 0,34,46,0], chord:[[62,65,69,72],0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, [58,62,65,69],0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0], lead: [86,0,0,0, 0,0,0,0, 81,0,0,0, 0,0,0,0, 82,0,0,0, 0,0,0,0, 77,0,0,0, 0,0,0,0], drums:[1,0,0,0, 2,0,0,0, 1,0,1,0, 2,0,0,0, 1,0,0,0, 2,0,0,0, 1,0,1,0, 2,1,2,1] }
+        ]
+    };
+
+    function init() {
+        if(!actx) {
+            actx = new (window.AudioContext || window.webkitAudioContext)();
+            
+            // Generate Noise Buffer (Used for C64 Snare & YM2149 Drums)
+            let noiseLen = actx.sampleRate * 2;
+            noiseBuffer = actx.createBuffer(1, noiseLen, actx.sampleRate);
+            let nData = noiseBuffer.getChannelData(0);
+            for(let i=0; i<noiseLen; i++) nData[i] = Math.random() * 2 - 1;
+
+            // True SID PWM Clipper Curve
+            clipperCurve = new Float32Array(256);
+            for(let i=0; i<256; i++) clipperCurve[i] = (i > 128) ? 1 : -1;
+
+            // YM2149 Bitcrusher
+            ymBitcrusher = actx.createWaveShaper();
+            let ymCurve = new Float32Array(1024);
+            for(let i=0; i<1024; i++) ymCurve[i] = Math.round(((i/1024)*2-1) * 8) / 8;
+            ymBitcrusher.curve = ymCurve;
+            ymBitcrusher.connect(actx.destination);
+
+            // Amiga Paula Setup
+            amigaFilter = actx.createBiquadFilter();
+            amigaFilter.type = 'lowpass'; amigaFilter.frequency.value = 3300; 
+            amigaDelay = actx.createDelay(); amigaDelay.delayTime.value = 0.38;
+            amigaFeedback = actx.createGain(); amigaFeedback.gain.value = 0.4;
+            amigaDelay.connect(amigaFeedback); amigaFeedback.connect(amigaDelay);
+            amigaDelay.connect(amigaFilter); amigaFilter.connect(actx.destination);
+
+            let len = 128;
+            paulaSamples.bass = actx.createBuffer(1, len, actx.sampleRate);
+            let bDat = paulaSamples.bass.getChannelData(0);
+            for(let i=0; i<len; i++) bDat[i] = (Math.sin(i/len*Math.PI*2) + 0.5*Math.sin(i/len*Math.PI*4)) * (1-(i/len)); 
+            
+            paulaSamples.chord = actx.createBuffer(1, len, actx.sampleRate);
+            let cDat = paulaSamples.chord.getChannelData(0);
+            for(let i=0; i<len; i++) cDat[i] = Math.sin(i/len*Math.PI*2) * 0.8 + Math.sin(i/len*Math.PI*6) * 0.2; 
+
+            paulaSamples.lead = actx.createBuffer(1, len, actx.sampleRate);
+            let lDat = paulaSamples.lead.getChannelData(0);
+            for(let i=0; i<len; i++) lDat[i] = (i/len < 0.5) ? 1 : -1; 
+        }
+    }
+
+    // --- TRUE SID SYNTHESIS (8580) ---
+    function playSID(time, pat, step) {
+        let spd = songC64.speed;
+
+        // BASS: Heavy Sawtooth with brutal analog filter sweep
+        if (pat.bass[step]) {
+            let osc = actx.createOscillator(), filter = actx.createBiquadFilter(), gain = actx.createGain();
+            osc.type = 'sawtooth'; osc.frequency.value = mtf(pat.bass[step]); 
+            filter.type = 'lowpass'; filter.Q.value = 16; // Screaming resonance
+            filter.frequency.setValueAtTime(4500, time);
+            filter.frequency.exponentialRampToValueAtTime(100, time + 0.05); // Super snappy envelope
+            gain.gain.setValueAtTime(0.8, time); 
+            gain.gain.setTargetAtTime(0, time + 0.05, 0.05); // Short snappy tail
+            osc.connect(filter); filter.connect(gain); gain.connect(actx.destination); 
+            osc.start(time); osc.stop(time + spd);
+        }
+
+        // ARP: Hardware multiplexing pulse chords
+        if (pat.arp[step] && Array.isArray(pat.arp[step])) {
+            let osc = actx.createOscillator(), shaper = actx.createWaveShaper(), gain = actx.createGain(); 
+            osc.type = 'triangle'; // Base for PWM
+            shaper.curve = clipperCurve; // PWM Clipper
+            
+            // 50Hz (20ms) Arp Multiplexing
+            let dur = spd / 3;
+            osc.frequency.setValueAtTime(mtf(pat.arp[step][0]), time);
+            osc.frequency.setValueAtTime(mtf(pat.arp[step][1]), time + dur);
+            osc.frequency.setValueAtTime(mtf(pat.arp[step][2]), time + dur*2);
+            
+            // Static PWM Offset for Arp
+            let pwmOffset = actx.createConstantSource(); pwmOffset.offset.value = 0.2;
+            pwmOffset.connect(shaper); pwmOffset.start(time); pwmOffset.stop(time+spd);
+
+            gain.gain.setValueAtTime(0.18, time); gain.gain.setTargetAtTime(0, time + 0.05, 0.1);
+            osc.connect(shaper); shaper.connect(gain); gain.connect(actx.destination); 
+            osc.start(time); osc.stop(time + spd);
+        }
+
+        // LEAD: Floating PWM with LFO & Vibrato
+        if (pat.lead[step]) {
+            let osc = actx.createOscillator(), shaper = actx.createWaveShaper(), gain = actx.createGain(); 
+            osc.type = 'triangle'; osc.frequency.value = mtf(pat.lead[step]);
+            shaper.curve = clipperCurve; 
+            
+            // Vibrato LFO
+            let vib = actx.createOscillator(), vibGain = actx.createGain();
+            vib.type = 'sine'; vib.frequency.value = 6; vibGain.gain.value = 12;
+            vib.connect(vibGain); vibGain.connect(osc.frequency); vib.start(time); vib.stop(time + spd * 4);
+            
+            // PWM Sweep LFO
+            let pwmMod = actx.createOscillator(), pwmGain = actx.createGain();
+            pwmMod.type = 'sine'; pwmMod.frequency.value = 2; // 2Hz sweep
+            pwmGain.gain.value = 0.6; // Width
+            pwmMod.connect(pwmGain); pwmGain.connect(shaper); pwmMod.start(time); pwmMod.stop(time + spd * 4);
+
+            let decay = (currentOrder === 5 || currentOrder === 8) ? 0.05 : 0.1;
+            gain.gain.setValueAtTime(0.35, time); gain.gain.setTargetAtTime(0, time + decay, 0.2);
+            osc.connect(shaper); shaper.connect(gain); gain.connect(actx.destination); 
+            osc.start(time); osc.stop(time + spd * 4);
+        }
+
+        // DRUMS: Hardware Register Simulation
+        if (pat.drums[step]) {
+            if (pat.drums[step] === 1) { 
+                // SID KICK: Brutal Triangle Pitch Drop
+                let osc = actx.createOscillator(), gain = actx.createGain();
+                osc.type = 'triangle'; 
+                osc.frequency.setValueAtTime(800, time); 
+                osc.frequency.exponentialRampToValueAtTime(40, time + 0.04);
+                gain.gain.setValueAtTime(1.0, time); gain.gain.exponentialRampToValueAtTime(0.01, time + 0.08);
+                osc.connect(gain); gain.connect(actx.destination); osc.start(time); osc.stop(time + 0.1);
+            } else { 
+                // SID SNARE: Noise + Envelope
+                let src = actx.createBufferSource(), filter = actx.createBiquadFilter(), gain = actx.createGain();
+                src.buffer = noiseBuffer;
+                filter.type = 'bandpass'; filter.frequency.value = 2000; filter.Q.value = 1;
+                gain.gain.setValueAtTime(0.7, time); gain.gain.exponentialRampToValueAtTime(0.01, time + 0.08);
+                src.connect(filter); filter.connect(gain); gain.connect(actx.destination); 
+                src.start(time); src.stop(time + 0.1);
+            }
+        }
+    }
+
+    // --- ATARI ST YM2149 ENGINE ---
+    function playYM2149(time, pat, step) {
+        let spd = songST.speed;
+        let playSynth = (note, dur, vol, isBuzzer, isLead) => {
+            if(!note) return;
+            let osc = actx.createOscillator(), gain = actx.createGain();
+            osc.type = isBuzzer ? 'sawtooth' : 'square'; 
+            osc.frequency.value = mtf(note);
+            
+            if (isLead) {
+                let lfo = actx.createOscillator(), lfoGain = actx.createGain();
+                lfo.type = 'sine'; lfo.frequency.value = 5; lfoGain.gain.value = 4;
+                lfo.connect(lfoGain); lfoGain.connect(osc.frequency); lfo.start(time); lfo.stop(time + dur * 4);
+                gain.gain.setValueAtTime(vol, time); gain.gain.setTargetAtTime(0, time + 0.1, 0.5); 
+                osc.connect(gain); gain.connect(ymBitcrusher); osc.start(time); osc.stop(time + dur * 4);
+            } else {
+                gain.gain.setValueAtTime(vol, time); 
+                gain.gain.exponentialRampToValueAtTime(0.001, time + dur * (isBuzzer ? 0.7 : 0.9));
+                osc.connect(gain); gain.connect(ymBitcrusher); osc.start(time); osc.stop(time + dur);
+            }
+        };
+        playSynth(pat.bass[step], spd, 0.4, true, false); 
+        playSynth(pat.lead1[step], spd, 0.3, false, true); 
+
+        if (pat.arp && pat.arp[step] && Array.isArray(pat.arp[step])) {
+            let osc = actx.createOscillator(), gain = actx.createGain(); osc.type = 'square';
+            osc.frequency.setValueAtTime(mtf(pat.arp[step][0]), time);
+            osc.frequency.setValueAtTime(mtf(pat.arp[step][1]), time + spd/3);
+            osc.frequency.setValueAtTime(mtf(pat.arp[step][2]), time + (spd/3)*2);
+            gain.gain.setValueAtTime(0.15, time); gain.gain.linearRampToValueAtTime(0, time + spd);
+            osc.connect(gain); gain.connect(ymBitcrusher); osc.start(time); osc.stop(time + spd);
+        }
+
+        if (pat.drums[step]) {
+            let noise = actx.createBufferSource(), filter = actx.createBiquadFilter(), gain = actx.createGain(); 
+            noise.buffer = noiseBuffer;
+            if (pat.drums[step] === 1) {
+                filter.type = 'lowpass'; filter.frequency.value = 300; 
+                gain.gain.setValueAtTime(0.9, time); gain.gain.exponentialRampToValueAtTime(0.01, time + spd/2); 
+            } else {
+                filter.type = 'highpass'; filter.frequency.value = 1000; 
+                gain.gain.setValueAtTime(0.6, time); gain.gain.exponentialRampToValueAtTime(0.01, time + spd/1.5); 
+            }
+            noise.connect(filter); filter.connect(gain); gain.connect(ymBitcrusher); noise.start(time); noise.stop(time+spd);
+        }
+    }
+
+    // --- AMIGA PAULA ENGINE ---
+    function playPaula(time, pat, step) {
+        let spd = songAmiga.speed;
+        let playSample = (buf, note, dur, vol, pan, toDelay) => {
+            let src = actx.createBufferSource(), gain = actx.createGain(), panner = actx.createStereoPanner();
+            src.buffer = buf; src.loop = true;
+            src.playbackRate.value = mtf(note) / 261.63; // Base C4
+            panner.pan.value = pan;
+            gain.gain.setValueAtTime(vol, time); gain.gain.exponentialRampToValueAtTime(0.01, time + dur);
+            src.connect(panner); panner.connect(gain); gain.connect(amigaFilter);
+            if(toDelay) gain.connect(amigaDelay);
+            src.start(time); src.stop(time + dur);
+        };
+
+        if (pat.chord[step] && Array.isArray(pat.chord[step])) {
+            pat.chord[step].forEach((note, idx) => { playSample(paulaSamples.chord, note, spd*16, 0.2, idx%2===0?-0.8:0.8, false); });
+        }
+        if (pat.bass[step]) playSample(paulaSamples.bass, pat.bass[step], spd*2, 0.6, 0, false);
+        if (pat.lead[step]) playSample(paulaSamples.lead, pat.lead[step], spd*6, 0.15, 0.5, true);
+        
+        if(pat.drums[step]) {
+            let osc = actx.createOscillator(), gain = actx.createGain(); osc.type = 'sine';
+            if(pat.drums[step] === 1) { 
+                osc.frequency.setValueAtTime(160, time); osc.frequency.exponentialRampToValueAtTime(0.01, time + 0.1); 
+                gain.gain.setValueAtTime(0.9, time); gain.gain.exponentialRampToValueAtTime(0.01, time + 0.1); 
+            } else { 
+                osc.type = 'square'; osc.frequency.setValueAtTime(300, time); 
+                gain.gain.setValueAtTime(0.4, time); gain.gain.exponentialRampToValueAtTime(0.01, time + 0.1); 
+            }
+            osc.connect(gain); gain.connect(amigaFilter); osc.start(time); osc.stop(time + 0.1);
+        }
+    }
+
+    function scheduler() {
+        while (nextNoteTime < actx.currentTime + 0.1) {
+            let song, playFn;
+            if (activeSystem === 'C64') { song = songC64; playFn = playSID; }
+            else if (activeSystem === 'ATARI') { song = songST; playFn = playYM2149; }
+            else if (activeSystem === 'AMIGA') { song = songAmiga; playFn = playPaula; }
+            
+            if(song) {
+                playFn(nextNoteTime, song.patterns[song.orders[currentOrder]], currentStep);
+                if(currentStep % 4 === 0) beatPulse = 1.0;
+                
+                nextNoteTime += song.speed; currentStep++;
+                if (currentStep >= 32) { currentStep = 0; currentOrder = (currentOrder + 1) % song.orders.length; }
+            }
+        }
+        timerID = setTimeout(scheduler, 25);
+    }
+
+    return { 
+        init, 
+        play: (sys) => { if(actx && actx.state === 'suspended') actx.resume(); AudioEngine.stop(); activeSystem = sys; currentStep = 0; currentOrder = 0; nextNoteTime = actx.currentTime + 0.05; scheduler(); },
+        stop: () => { clearTimeout(timerID); activeSystem = null; },
+        getVisualState: () => {
+            if (activeSystem === 'C64') return songC64.visuals[currentOrder];
+            if (activeSystem === 'ATARI') return songST.visuals[currentOrder];
+            if (activeSystem === 'AMIGA') return songAmiga.visuals[currentOrder];
+            return 0;
+        }
+    };
+})();
+
+// --- UI & RENDER ---
+function resize() { w = canvas.width = window.innerWidth; h = canvas.height = window.innerHeight; }
+window.addEventListener('resize', resize); resize();
+window.addEventListener('mousemove', e => { mouseX = e.clientX; mouseY = e.clientY; });
+window.addEventListener('click', () => {
+    document.getElementById('instruction').style.opacity = '0';
+    AudioEngine.init();
+    if (state === 'MENU') { const sw = w / 3; switchState(mouseX < sw ? 'C64' : mouseX < sw * 2 ? 'ATARI' : 'AMIGA'); }
+});
+window.addEventListener('keydown', e => { 
+    if (e.key === 'Escape') { switchState('MENU'); document.getElementById('instruction').style.opacity = '1'; }
+});
+
+function switchState(newState) { state = newState; t = 0; if(state === 'MENU') AudioEngine.stop(); else AudioEngine.play(state); }
+
+let stars = Array.from({length: 200}, () => ({x: Math.random()*2000, y: Math.random()*2000, z: Math.random()*2}));
+
+function renderMenu() {
+    ctx.fillStyle = '#050505'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = 'white';
+    stars.forEach(s => { s.y = (s.y + s.z * (2 + beatPulse * 5)) % h; ctx.globalAlpha = s.z/2; ctx.fillRect(s.x%w, s.y, s.z*2, s.z*2); }); ctx.globalAlpha = 1;
+
+    const sw = w / 3, sys = ['C64', 'ATARI ST', 'AMIGA'], col = ['#4A0000', '#004A00', '#00004A'], hCol = ['#D00000', '#00D000', '#0000D0'];
+    let hov = (mouseX < sw) ? 0 : (mouseX < sw * 2) ? 1 : 2;
+
+    for (let i = 0; i < 3; i++) {
+        let bump = (hov === i) ? beatPulse * 15 : 0;
+        ctx.fillStyle = (hov === i) ? hCol[i] : col[i];
+        ctx.shadowBlur = (hov === i) ? 80 : 0; ctx.shadowColor = ctx.fillStyle;
+        ctx.fillRect(i * sw + 20 - bump, h/2 - 150 - bump, sw - 40 + bump*2, 300 + bump*2);
+        ctx.shadowBlur = 0; ctx.fillStyle = '#FFF'; ctx.textAlign = 'center'; ctx.font = '24px "Press Start 2P"';
+        ctx.fillText(sys[i], i * sw + sw/2, h/2 + 10);
+    }
+    ctx.fillStyle = '#FFF'; ctx.font = '30px "Press Start 2P"'; ctx.fillText("SELECT SYSTEM", w/2, 100 + Math.sin(t*3)*10);
+}
+
+// --- C64 VISUALS ---
+let c64ScrollPos = 0;
+function renderC64() {
+    let vState = AudioEngine.getVisualState();
+    ctx.fillStyle = '#4242e7'; ctx.fillRect(0, 0, w, h);
+    const bw = 100; ctx.fillStyle = '#a8a8e7'; ctx.fillRect(bw, bw, w - bw*2, h - bw*2);
+
+    if (vState === 0) { 
+        let rasterY = (h/2) + Math.sin(t * 3) * (h/4);
+        for(let i=0; i<40; i++) {
+            let r = Math.floor(128 + Math.sin(i*0.2 + t*5)*127 + beatPulse*50), g = Math.floor(128 + Math.sin(i*0.2 + t*4)*127 + beatPulse*50), b = Math.floor(128 + Math.sin(i*0.2 + t*3)*127 + beatPulse*50);
+            ctx.fillStyle = `rgb(${Math.min(255,r)},${Math.min(255,g)},${Math.min(255,b)})`; ctx.fillRect(bw, rasterY + i*4, w - bw*2, 4);
+        }
+        ctx.font = '30px "Press Start 2P"'; ctx.textAlign = 'left';
+        c64ScrollPos -= 4; if(c64ScrollPos < -w*4) c64ScrollPos = w; 
+        const txt = "COMMODORE 64 - BARE METAL AUDIO EDITION - TRUE PWM SYNTHESIS...   ";
+        for(let i=0; i<txt.length; i++) {
+            let cx = c64ScrollPos + (i * 35);
+            if(cx > -50 && cx < w) {
+                let cy = (h - 60) + Math.sin(t * 5 + i * 0.3) * 40 - (beatPulse * 15);
+                ctx.fillStyle = '#000'; ctx.fillText(txt[i], cx+4, cy+4); ctx.fillStyle = '#FFF'; ctx.fillText(txt[i], cx, cy);
+            }
+        }
+    } else if (vState === 1) { 
+        let pSize = 20; 
+        for(let x=bw; x<w-bw; x+=pSize) {
+            for(let y=bw; y<h-bw; y+=pSize) {
+                let val = Math.sin(x*0.01 + t*2) + Math.cos(y*0.02 + t) + Math.sin((x+y)*0.01 - t);
+                let col = (val > 1) ? '#ffffff' : (val > 0) ? '#88ffff' : (val > -1) ? '#cc44cc' : '#4444cc'; 
+                ctx.fillStyle = col; ctx.fillRect(x, y, pSize, pSize);
+            }
+        }
+    } else if (vState === 2) { 
+        ctx.fillStyle = '#000'; ctx.fillRect(bw, bw, w - bw*2, h - bw*2);
+        let cols = ['#fff', '#f00', '#0f0', '#ff0', '#00f', '#f0f', '#0ff', '#aaa'];
+        for(let i=0; i<8; i++) {
+            let sx = w/2 + Math.sin(t*3 + i)*200, sy = h/2 + Math.cos(t*2 + i)*150;
+            ctx.fillStyle = cols[i]; ctx.fillRect(sx-25, sy-25, 50, 50);
+        }
+    } else if (vState === 3) { 
+        ctx.fillStyle = '#000'; ctx.fillRect(bw, bw, w - bw*2, h - bw*2);
+        for(let y=bw; y<h-bw; y+=8) {
+            let offset = Math.sin(y*0.01 + t*3) * 100;
+            let width = Math.cos(y*0.015 + t*2) * 50 + 50;
+            ctx.fillStyle = (Math.sin(y*0.05 + t*5) > 0) ? '#a8a8e7' : '#ffffff';
+            ctx.fillRect(w/2 + offset - width/2, y, width, 8);
+        }
+    } else if (vState === 4) { 
+        ctx.fillStyle = '#000'; ctx.fillRect(bw, bw, w - bw*2, h - bw*2);
+        ctx.font = '20px "Press Start 2P"'; ctx.textAlign = 'center';
+        let chars = "♠♣♥♦◘○◙♂♀♪♫☼►◄↕‼¶§▬↨↑↓→←∟↔▲▼";
+        for(let x=bw+20; x<w-bw; x+=30) {
+            let yOffset = (t*200 + x*12) % (h-bw*2);
+            ctx.fillStyle = (x%2===0) ? '#88ffff' : '#00ff00';
+            ctx.fillText(chars[Math.floor((t*10 + x)%chars.length)], x, bw + yOffset);
+        }
+    }
+}
+
+// --- ATARI ST VISUALS ---
+const vCube = [[-1,-1,-1], [1,-1,-1], [1,1,-1], [-1,1,-1], [-1,-1,1], [1,-1,1], [1,1,1], [-1,1,1]];
+const eCube = [[0,1],[1,2],[2,3],[3,0], [4,5],[5,6],[6,7],[7,4], [0,4],[1,5],[2,6],[3,7]];
+const vPyr = [[0,-1,0], [-1,1,-1], [1,1,-1], [1,1,1], [-1,1,1]];
+const fPyr = [[0,1,2, '#0F0'], [0,2,3, '#0A0'], [0,3,4, '#050'], [0,4,1, '#080'], [1,4,3,2, '#030']]; 
+
+function renderST() {
+    let vState = AudioEngine.getVisualState();
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 2; ctx.strokeRect(100, 100, w-200, h-200);
+
+    let angleX = t * 1.2, angleY = t * 0.8;
+
+    if (vState === 0) { 
+        let scale = 1.5 + (beatPulse * 0.3), proj = [];
+        for(let v of vCube) {
+            let x1 = v[0]*scale * Math.cos(angleY) - v[2]*scale * Math.sin(angleY), z1 = v[0]*scale * Math.sin(angleY) + v[2]*scale * Math.cos(angleY);
+            let y2 = v[1]*scale * Math.cos(angleX) - z1 * Math.sin(angleX), z2 = v[1]*scale * Math.sin(angleX) + z1 * Math.cos(angleX);
+            let fov = 400, z = z2 + 4; proj.push([(x1 * fov) / z + (w/2), (y2 * fov) / z + (h/2)]);
+        }
+        ctx.strokeStyle = `rgb(0, ${150 + beatPulse*105}, 0)`; ctx.lineWidth = 4 + beatPulse*2; ctx.beginPath();
+        for(let e of eCube) { ctx.moveTo(proj[e[0]][0], proj[e[0]][1]); ctx.lineTo(proj[e[1]][0], proj[e[1]][1]); } ctx.stroke();
+    } else if (vState === 1) { 
+        let scale = 2.0, projV = [];
+        for(let v of vPyr) {
+            let x1 = v[0]*scale * Math.cos(angleY) - v[2]*scale * Math.sin(angleY), z1 = v[0]*scale * Math.sin(angleY) + v[2]*scale * Math.cos(angleY);
+            let y2 = v[1]*scale * Math.cos(angleX) - z1 * Math.sin(angleX), z2 = v[1]*scale * Math.sin(angleX) + z1 * Math.cos(angleX);
+            projV.push({ x: x1, y: y2, z: z2 }); 
+        }
+        let facesToDraw = [];
+        for(let f of fPyr) {
+            let p1 = projV[f[0]], p2 = projV[f[1]], p3 = projV[f[2]];
+            let nz = (p2.x - p1.x)*(p3.y - p1.y) - (p2.y - p1.y)*(p3.x - p1.x);
+            if(nz < 0) { facesToDraw.push({face: f, z: (p1.z + p2.z + p3.z) / 3}); }
+        }
+        facesToDraw.sort((a,b) => b.z - a.z); 
+        for(let fd of facesToDraw) {
+            let f = fd.face, fov = 400;
+            ctx.fillStyle = f[f.length-1]; ctx.beginPath();
+            for(let i=0; i<f.length-1; i++) {
+                let pv = projV[f[i]], px = (pv.x * fov) / (pv.z + 4) + (w/2), py = (pv.y * fov) / (pv.z + 4) + (h/2);
+                if(i===0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+            }
+            ctx.closePath(); ctx.fill(); ctx.stroke();
+        }
+    } else if (vState === 2) { 
+        for(let i=0; i<40; i++) {
+            let z = Math.sin(i*0.2 + t*2) * 100;
+            let px = w/2 + Math.cos(i*0.2 + t*2) * 200 * (400/(z+400));
+            let py = h/2 - 200 + i*10;
+            let radius = 15 * (400/(z+400));
+            ctx.fillStyle = (z>0) ? '#0A0' : '#050';
+            ctx.beginPath(); ctx.arc(px, py, radius, 0, Math.PI*2); ctx.fill();
+        }
+    } else if (vState === 3) { 
+        ctx.fillStyle = '#FFF';
+        for(let i=0; i<200; i++) {
+            let a = i * 0.13 + t, z = ((i * 10 - t*500) % 1000 + 1000) % 1000;
+            let px = w/2 + (Math.cos(a)*200 * 400)/z, py = h/2 + (Math.sin(a)*200 * 400)/z, size = Math.max(1, 1000/z);
+            ctx.fillRect(px, py, size, size);
+        }
+    } else if (vState === 4) { 
+        ctx.strokeStyle = '#0F0'; ctx.lineWidth = 2;
+        let cx1 = w/2 + Math.sin(t)*100, cy1 = h/2 + Math.cos(t*1.5)*100, cx2 = w/2 + Math.cos(t)*100, cy2 = h/2 + Math.sin(t*1.2)*100;
+        for(let r=10; r<w; r+=20) {
+            ctx.beginPath(); ctx.arc(cx1, cy1, r, 0, Math.PI*2); ctx.stroke();
+            ctx.beginPath(); ctx.arc(cx2, cy2, r, 0, Math.PI*2); ctx.stroke();
+        }
+    }
+}
+
+// --- AMIGA VISUALS ---
+let blitterTrails = [];
+function renderAmiga() {
+    let vState = AudioEngine.getVisualState();
+    
+    if (vState === 0) { 
+        for(let y=0; y<h; y+=8) {
+            let r = Math.floor((Math.sin(y*0.01 + t) + 1) * 127 + beatPulse*30), b = Math.floor((Math.cos(y*0.015 - t) + 1) * 127 + beatPulse*30);
+            ctx.fillStyle = `rgb(${Math.min(255,r)}, 0, ${Math.min(255,b)})`; ctx.fillRect(0, y, w, 8);
+        }
+        let amX = (w/2) + Math.sin(t * 2) * (w/3), amY = (h/2 - 50) + Math.abs(Math.sin(t * 4)) * 150 - 150 - beatPulse*20;
+        blitterTrails.push({x: amX, y: amY}); if(blitterTrails.length > 15) blitterTrails.shift();
+        ctx.font = '80px "Press Start 2P"'; ctx.textAlign = 'center';
+        for(let i=0; i<blitterTrails.length; i++) {
+            ctx.fillStyle = `rgba(255, 255, 255, ${(i / blitterTrails.length) * 0.3})`; ctx.fillText("AMIGA", blitterTrails[i].x, blitterTrails[i].y);
+        }
+        ctx.fillStyle = '#FFF'; ctx.shadowBlur = 30; ctx.shadowColor = '#FFF'; ctx.fillText("AMIGA", amX, amY); ctx.shadowBlur = 0;
+    } else if (vState === 1) { 
+        ctx.save(); ctx.translate(w/2, h/2); ctx.rotate(t * 0.5);
+        let zoom = Math.sin(t) * 2 + 3; ctx.scale(zoom, zoom);
+        let cbSize = 40, viewLimit = Math.max(w,h) / zoom, startX = -viewLimit/2 - cbSize, endX = viewLimit/2 + cbSize;
+        for(let x=startX; x<endX; x+=cbSize) {
+            for(let y=startX; y<endX; y+=cbSize) {
+                if((Math.floor(x/cbSize) + Math.floor(y/cbSize)) % 2 === 0) {
+                    ctx.fillStyle = `rgb(0, ${100 + beatPulse*100}, 255)`; ctx.fillRect(x, y, cbSize, cbSize);
+                } else { ctx.fillStyle = '#000'; ctx.fillRect(x, y, cbSize, cbSize); }
+            }
+        }
+        ctx.restore();
+    } else if (vState === 2) { 
+        ctx.fillStyle = '#000'; ctx.fillRect(0,0,w,h);
+        let scale = 2.0, angleX = t*1.5, angleY = t*1.1, projV = [];
+        for(let v of vCube) { 
+            let x1 = v[0]*scale * Math.cos(angleY) - v[2]*scale * Math.sin(angleY), z1 = v[0]*scale * Math.sin(angleY) + v[2]*scale * Math.cos(angleY);
+            let y2 = v[1]*scale * Math.cos(angleX) - z1 * Math.sin(angleX), z2 = v[1]*scale * Math.sin(angleX) + z1 * Math.cos(angleX);
+            projV.push({ x: x1, y: y2, z: z2 }); 
+        }
+        let facesToDraw = [];
+        for(let f of [[0,1,2,3],[4,5,6,7],[0,4,7,3],[1,5,6,2],[0,1,5,4],[3,2,6,7]]) {
+            let p1 = projV[f[0]], p2 = projV[f[1]], p3 = projV[f[2]];
+            facesToDraw.push({face: f, z: (p1.z + p2.z + p3.z) / 3});
+        }
+        facesToDraw.sort((a,b) => b.z - a.z); 
+        for(let fd of facesToDraw) {
+            let f = fd.face, fov = 400;
+            ctx.fillStyle = `rgba(0, 150, 255, 0.5)`; ctx.strokeStyle = '#FFF'; ctx.lineWidth = 1; ctx.beginPath();
+            for(let i=0; i<f.length; i++) {
+                let pv = projV[f[i]], px = (pv.x * fov) / (pv.z + 4) + (w/2), py = (pv.y * fov) / (pv.z + 4) + (h/2);
+                if(i===0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+            }
+            ctx.closePath(); ctx.fill(); ctx.stroke();
+        }
+    } else if (vState === 3) { 
+        ctx.fillStyle = '#000'; ctx.fillRect(0,0,w,h);
+        ctx.fillStyle = '#00f'; ctx.fillRect(0, h/2, w, h/2); 
+        for(let y=h/2; y<h; y+=4) {
+            let z = y - h/2; if(z===0) continue;
+            let speed = t * 200, rowOffset = (speed / z) % 40;
+            ctx.fillStyle = (Math.floor((z + t*50)/10) % 2 === 0) ? '#008' : '#00a'; ctx.fillRect(0, y, w, 4);
+            ctx.fillStyle = '#FFF';
+            for(let x=-w; x<w*2; x+=100) { let px = w/2 + ((x - w/2) * z) / 100 + rowOffset*z/10; ctx.fillRect(px, y, z/10, 4); }
+        }
+    } else if (vState === 4) { 
+        let pSize = 15;
+        for(let x=0; x<w; x+=pSize) {
+            for(let y=0; y<h; y+=pSize) {
+                let val = Math.sin(x*0.01 + t) + Math.sin(y*0.01 + t*1.5) + Math.sin((x+y)*0.01);
+                let r = Math.floor((Math.sin(val + t) + 1) * 127), b = Math.floor((Math.cos(val - t) + 1) * 127);
+                ctx.fillStyle = `rgb(${r}, 50, ${b})`; ctx.fillRect(x, y, pSize, pSize);
+            }
+        }
+        ctx.font = '60px "Press Start 2P"'; ctx.textAlign = 'center'; ctx.fillStyle = '#FFF';
+        ctx.shadowBlur = 20; ctx.shadowColor = '#000'; ctx.fillText("PAULA 8364", w/2, h/2); ctx.shadowBlur = 0;
+    }
+}
+
+let lastTime = 0;
+function loop(timestamp) {
+    t += (timestamp - lastTime) / 1000 || 0; lastTime = timestamp;
+    beatPulse = Math.max(0, beatPulse - 0.05);
+
+    if (state === 'MENU') renderMenu();
+    else if (state === 'C64') renderC64();
+    else if (state === 'ATARI') renderST();
+    else if (state === 'AMIGA') renderAmiga();
+
+    requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+</script>
+</body>
+</html>
