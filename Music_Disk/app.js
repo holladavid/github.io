@@ -572,13 +572,17 @@ function playAmigaNote(channel, sampleName, period, vol) {
 // ==========================================
 // TRACK GENERATOR 3: Amiga "ProTracker" Style
 // ==========================================
+// ==========================================
+// TRACK GENERATOR 3: Amiga "ProTracker" Style
+// ==========================================
 function generateJesterStyleTrack() {
     let data = [];
     let frames = 400; // 400 Frames = 8 Sekunden bei 50Hz
     
     // ProTracker Perioden (C-2 = 856, C-3 = 428)
-    const pC3 = 428, pD#3 = 360, pG3 = 285, pA#3 = 240;
-    const pC2 = 856, pD#2 = 720;
+    // Variablen-Namen korrigiert: 's' statt '#' (Ds = D-Sharp)
+    const pC3 = 428, pDs3 = 360, pG3 = 285, pAs3 = 240;
+    const pC2 = 856, pDs2 = 720;
 
     for (let i = 0; i < frames; i++) {
         let frameData = { isAmiga: true, cmds: [] };
@@ -590,7 +594,7 @@ function generateJesterStyleTrack() {
         
         // --- KANAL 1 (Rechts): Synth Bass ---
         let isOffbeat = (i % 10) >= 5;
-        let bassNote = isOffbeat ? pD#2 : pC2;
+        let bassNote = isOffbeat ? pDs2 : pC2;
         
         if (i % 5 === 0) {
             // Trigger den Bass neu
@@ -607,11 +611,11 @@ function generateJesterStyleTrack() {
             frameData.cmds.push({ ch: 2, smp: 'chord', per: pC3, vol: 48 });
         } else if (i % 80 === 70) {
             // Ghost Note Stab
-            frameData.cmds.push({ ch: 2, smp: 'chord', per: pD#3, vol: 24 });
+            frameData.cmds.push({ ch: 2, smp: 'chord', per: pDs3, vol: 24 });
         }
 
         // --- KANAL 3 (Links): Lead Arpeggio ---
-        let leadNotes = [pC3, pD#3, pG3, pA#3];
+        let leadNotes = [pC3, pDs3, pG3, pAs3];
         if (i % 4 === 0) { // Sehr schnelles Amiga-Arpeggio
             let note = leadNotes[(i / 4) % leadNotes.length];
             frameData.cmds.push({ ch: 3, smp: 'bass', per: note, vol: 20 });
