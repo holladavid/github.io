@@ -71,13 +71,6 @@ function writeYMReg(reg, val) {
     }
 }
 
-// Batch-Schreibfunktion für SID (effizienter)
-function writeSIDRegsBatch(regs) {
-    if(sidNode) {
-        sidNode.port.postMessage({ type: 'WRITE_REGS_BATCH', regs: regs });
-    }
-}
-
 // --- DER PROOF OF CONCEPT BEEP (C-Dur Akkord) ---
 function playProofOfConceptBeep() {
     // Die Mathematik des Atari ST: 
@@ -136,7 +129,16 @@ function startPlayback() {
     }, 20);
 }
 
-// HINWEIS: stopPlayback() ist weiter unten optimiert definiert
+// In der stopPlayback() Funktion Stille für den SID hinzufügen:
+function stopPlayback() {
+    if (!isPlaying) return;
+    clearInterval(playTimer);
+    isPlaying = false;
+    
+    writeYMReg(8, 0); writeYMReg(9, 0); writeYMReg(10, 0); // Atari aus
+    for(let i=0; i<4; i++) playAmigaNote(i, null, 1, 0);   // Amiga aus
+    writeSIDReg(24, 0); // C64 Master Volume aus
+}
 
 // --- BUGFIX: Sicheres Umschalten der Themes ---
 function setTheme(themeName) {
@@ -164,7 +166,6 @@ function setTheme(themeName) {
 }
 
 // --- ZONE 1: DAS ECHTZEIT-OSZILLOSKOP ---
-let oscAnimationId = null;
 function initVisuals() {
     const canvas = document.getElementById('demo-canvas');
     const ctx = canvas.getContext('2d');
@@ -172,24 +173,23 @@ function initVisuals() {
     canvas.width = canvas.clientWidth;
     canvas.height = canvas.clientHeight;
 
-    // OPTIMIERUNG: Ringbuffer statt push/shift
+    // Ein Array, um die alten Werte für eine Linie zu speichern
     const historyLength = canvas.width; 
-    const oscHistory = new Float32Array(historyLength); // Float32Array ist schneller
-    let historyIndex = 0;
+    const oscHistory = new Array(historyLength).fill(0);
 
     function draw() {
         // 1. Hintergrund leicht transparent übermalen für "Motion Blur" Effekt
         ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         
-        // 2. Themen-Farbe auslesen (nur wenn nötig)
-        const isAtari = document.body.classList.contains('theme-atari');
+        // 2. Themen-Farbe auslesen
         const isAmiga = document.body.classList.contains('theme-amiga');
+        const isAtari = document.body.classList.contains('theme-atari');
         const lineColor = isAtari ? '#55ff55' : isAmiga ? '#ff8800' : '#6c5eb5';
         
-        // 3. Neuen Wert in Ringbuffer schreiben (statt push/shift)
-        oscHistory[historyIndex] = currentOscValue;
-        historyIndex = (historyIndex + 1) % historyLength;
+        // 3. Neuen Wert ins Array schieben (und ältesten entfernen)
+        oscHistory.push(currentOscValue);
+        oscHistory.shift();
 
         // 4. Die Oszilloskop-Linie zeichnen
         ctx.beginPath();
@@ -197,7 +197,9 @@ function initVisuals() {
         ctx.lineWidth = 3;
         
         for (let x = 0; x < historyLength; x++) {
-            let val = oscHistory[(historyIndex + x) % historyLength];
+            // currentOscValue ist zwischen -1.0 und 1.0. Wir skalieren es auf die Canvas-Höhe.
+            let val = oscHistory[x];
+            // Y-Mitte plus Ausschlag (Amplituden-Verstärkung * 50)
             let y = (canvas.height / 2) - (val * (canvas.height * 0.4)); 
             
             if (x === 0) {
@@ -208,20 +210,12 @@ function initVisuals() {
         }
         ctx.stroke();
 
-        oscAnimationId = requestAnimationFrame(draw);
+        requestAnimationFrame(draw);
     }
     draw();
 }
 
-function stopOscAnimation() {
-    if (oscAnimationId) {
-        cancelAnimationFrame(oscAnimationId);
-        oscAnimationId = null;
-    }
-}
-
 // --- ZONE 4: DER SINUS-SCROLLER ---
-let scrollerAnimationId = null;
 function initScroller() {
     const canvas = document.getElementById('scroller-canvas');
     const ctx = canvas.getContext('2d');
@@ -238,35 +232,39 @@ function initScroller() {
     const frequency = 0.015; // Wie eng die Sinus-Wellen zusammenliegen
     const amplitude = canvas.height / 3; // Wie hoch der Text ausschlägt
     
-    // OPTIMIERUNG: Pre-calculate constant values
-    const charWidth = ctx.measureText("A").width;
-    const totalTextWidth = charWidth * scrollText.length;
-    
     function draw() {
         // 1. Hintergrund für diesen Frame schwarz malen (löschen)
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         
         // 2. Aktuelles Theme auslesen für Farbe & Font
-        const isAtari = document.body.classList.contains('theme-atari');
         const isAmiga = document.body.classList.contains('theme-amiga');
+        const isAtari = document.body.classList.contains('theme-atari');
         
         // Farbe und Font dynamisch anpassen
         ctx.fillStyle = isAtari ? '#55ff55' : isAmiga ? '#ff8800' : '#6c5eb5';
         ctx.font = isAmiga || isAtari ? "24px 'VT323', monospace" : "16px 'Press Start 2P', monospace";
         ctx.textBaseline = "middle";
         
-        // 3. Startposition (ganz rechts am Rand) minus den bisherigen Fortschritt
+        // 3. Breite eines Buchstabens ermitteln (Monospace = alle gleich breit)
+        const charWidth = ctx.measureText("A").width;
+        const totalTextWidth = charWidth * scrollText.length;
+        
+        // Startposition (ganz rechts am Rand) minus den bisherigen Fortschritt
         let startX = canvas.width - offset;
         
         // 4. Jeden Buchstaben einzeln zeichnen
         for (let i = 0; i < scrollText.length; i++) {
+            let char = scrollText[i];
             let x = startX + (i * charWidth);
             
             // Render-Optimierung: Nur zeichnen, wenn der Buchstabe im Bild ist
             if (x > -50 && x < canvas.width + 50) {
+                // Die Magie: Y-Position auf einer Sinuskurve berechnen
+                // Durch x*frequency wabbelt es räumlich. Durch offset wabbelt es zeitlich.
                 let y = (canvas.height / 2) + Math.sin((x * frequency) + (offset * 0.05)) * amplitude;
-                ctx.fillText(scrollText[i], x, y);
+                
+                ctx.fillText(char, x, y);
             }
         }
         
@@ -278,17 +276,11 @@ function initScroller() {
             offset = 0;
         }
         
-        scrollerAnimationId = requestAnimationFrame(draw);
+        // Nächsten Frame anfordern (sorgt für flüssige 60 FPS)
+        requestAnimationFrame(draw);
     }
     
     draw();
-}
-
-function stopScrollerAnimation() {
-    if (scrollerAnimationId) {
-        cancelAnimationFrame(scrollerAnimationId);
-        scrollerAnimationId = null;
-    }
 }
 
 // ==========================================
@@ -428,16 +420,11 @@ function selectAndPlayTrack(index, system) {
     startPlayback();
 }
 
-// 50 Hz Player Engine (OPTIMIERT)
-// Speichert den vorherigen Frame um nur geänderte Register zu schreiben
-let lastC64Frame = null;
-let lastYMFrame = null;
-
+// 50 Hz Player Engine (UPDATE)
+// In der startPlayback() Funktion den C64 Zweig einbauen:
 function startPlayback() {
     if (isPlaying || trackData.length === 0) return;
     isPlaying = true;
-    lastC64Frame = null;
-    lastYMFrame = null;
     
     playTimer = setInterval(() => {
         let frame = trackData[currentFrame];
@@ -445,26 +432,11 @@ function startPlayback() {
         if (frame.isAmiga) {
             frame.cmds.forEach(cmd => playAmigaNote(cmd.ch, cmd.smp, cmd.per, cmd.vol));
         } else if (frame.isC64) {
-            // OPTIMIERUNG: Nur geänderte Register schreiben + Batch-Messaging
-            let changedRegs = [];
-            for (let r = 0; r < 29; r++) {
-                if (!lastC64Frame || frame.regs[r] !== lastC64Frame.regs[r]) {
-                    changedRegs.push({ reg: r, val: frame.regs[r] });
-                }
-            }
-            // Schreibe alle geänderten Register in einer Nachricht
-            if (changedRegs.length > 0 && sidNode) {
-                sidNode.port.postMessage({ type: 'WRITE_REGS_BATCH', regs: changedRegs });
-            }
-            lastC64Frame = frame;
+            // C64 Register schreiben
+            for (let r = 0; r < 29; r++) { writeSIDReg(r, frame.regs[r]); }
         } else {
-            // OPTIMIERUNG: Nur geänderte Register schreiben
-            for (let r = 0; r < 14; r++) {
-                if (!lastYMFrame || frame[r] !== lastYMFrame[r]) {
-                    writeYMReg(r, frame[r]);
-                }
-            }
-            lastYMFrame = frame;
+            // Atari YM Register schreiben
+            for (let r = 0; r < 14; r++) { writeYMReg(r, frame[r]); }
         }
         
         currentFrame++;
@@ -472,13 +444,11 @@ function startPlayback() {
     }, 20);
 }
 
-// Optimierte stopPlayback() Funktion mit Cleanup:
+// In der stopPlayback() Funktion Stille für den SID hinzufügen:
 function stopPlayback() {
     if (!isPlaying) return;
     clearInterval(playTimer);
     isPlaying = false;
-    lastC64Frame = null;
-    lastYMFrame = null;
     
     writeYMReg(8, 0); writeYMReg(9, 0); writeYMReg(10, 0); // Atari aus
     for(let i=0; i<4; i++) playAmigaNote(i, null, 1, 0);   // Amiga aus

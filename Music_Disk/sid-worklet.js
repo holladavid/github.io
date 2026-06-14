@@ -23,11 +23,6 @@ class SIDProcessor extends AudioWorkletProcessor {
         this.port.onmessage = (e) => {
             if (e.data.type === 'WRITE_REG') {
                 this.regs[e.data.reg] = e.data.val;
-            } else if (e.data.type === 'WRITE_REGS_BATCH') {
-                // OPTIMIERUNG: Batch-Update für mehrere Register auf einmal
-                e.data.regs.forEach(item => {
-                    this.regs[item.reg] = item.val;
-                });
             }
         };
     }
