@@ -15,6 +15,31 @@ let currentTrackIndex = 0;
 let currentScrollerText = "+++ INITIALIZING DEMO ENGINE... +++";
 let lastKnownFrame = 0; // NEU: Merkt sich den Frame für die Timeline
 
+// --- DIE PERMANENTEN HARDWARE-HANDBÜCHER ---
+const systemDescriptions = {
+    c64: `
+        <div style="border: 1px solid var(--text-color); padding: 10px; margin-bottom: 15px; background: rgba(0,0,0,0.2);">
+            <h3 style="color: var(--highlight-color); margin-bottom: 5px;">[ CHIP-SPECS: MOS SID 6581 ]</h3>
+            <p>Ein echter, analoger subtraktiver Synthesizer auf einem Silizium-Chip. Besitzt 3 Oszillatoren, Hardware-ADSR-Hüllkurven und ein legendäres, rein analoges Multimode-Filter.</p>
+            <p style="margin-top: 8px;"><strong>🔥 Szene-Hack (PWM):</strong> Da der C64 nur 3 Stimmen hat, modulierten Coder die Pulsweite der Rechteckwelle (PWM) in rasender Geschwindigkeit, um wabernde, extrem "dicke" Bässe zu erzeugen, die klingen, als liefen mehrere Oszillatoren gleichzeitig.</p>
+        </div>
+    `,
+    amiga: `
+        <div style="border: 1px solid var(--text-color); padding: 10px; margin-bottom: 15px; background: rgba(0,0,0,0.2);">
+            <h3 style="color: var(--highlight-color); margin-bottom: 5px;">[ CHIP-SPECS: MOS PAULA 8364 ]</h3>
+            <p>Paula revolutionierte den Sound durch Direct Memory Access (DMA). Anstatt Töne zu generieren, liest Paula 4 eigenständige 8-Bit PCM-Samples direkt aus dem RAM und pitcht sie in Hardware stufenlos hoch und runter.</p>
+            <p style="margin-top: 8px;"><strong>🔥 Szene-Hack (Software-Mixing):</strong> Um das starre Hard-Panning (1&4 links, 2&3 rechts) und das 4-Kanal-Limit zu überwinden, mischten geniale Programmierer (wie Chris Hülsbeck) per CPU mehrere Samples zusammen, um 7-stimmige Polyphonie zu erreichen.</p>
+        </div>
+    `,
+    atari: `
+        <div style="border: 1px solid var(--text-color); padding: 10px; margin-bottom: 15px; background: rgba(0,0,0,0.2);">
+            <h3 style="color: var(--highlight-color); margin-bottom: 5px;">[ CHIP-SPECS: YAMAHA YM2149 ]</h3>
+            <p>Ein puristischer Programmable Sound Generator (PSG) mit 3 Rechteck-Kanälen und einem Rauschgenerator. Besitzt keine Filter und hardwareseitig <em>keinen</em> Kanal für Sprachsamples (PCM).</p>
+            <p style="margin-top: 8px;"><strong>🔥 Der Digidrum-Hack:</strong> Jochen Hippel missbrauchte CPU-Timer, um das Lautstärkeregister rasend schnell zu überschreiben und fette PCM-Drums abzuspielen. Um diese Trigger in den winzigen <code>.ym</code> Dateien zu speichern, versteckte Arnaud Carré (Leonard) sie in den <em>ungenutzten Bits (Bit 4-7) der Frequenz-Register</em>! Diese Engine decodiert den Hack in Echtzeit.</p>
+        </div>
+    `
+};
+
 // --- BOOT SEQUENZ (Modul-sicher) ---
 function initApp() {
     const bootScreen = document.getElementById("boot-screen");
@@ -175,14 +200,17 @@ function setTheme(themeName) {
     };
     document.querySelector('.museum-header').innerText = headerTitles[activeSystem];
 
-    // 3. BUGFIX: Das Museum und den Scroller auf "Warten" setzen, bis ein Track geklickt wird
+    // 3. Das Museum auf "Warten" setzen, aber die Chip-Specs sofort anzeigen!
     document.getElementById('info-text').innerHTML = `
-        <p style="color: var(--highlight-color);">[ SYSTEM READY ]</p>
-        <p>Please select a track from the playlist to initialize playback and load data into memory...</p>
-        <p class="blinking-cursor" style="margin-top: 15px;">_</p>
+        ${systemDescriptions[activeSystem]}
+        <div>
+            <p style="color: var(--highlight-color);">[ SYSTEM READY ]</p>
+            <p>Please select a track from the playlist to initialize playback and load data into memory...</p>
+            <p class="blinking-cursor" style="margin-top: 15px;">_</p>
+        </div>
     `;
     currentScrollerText = `+++ ${activeSystem.toUpperCase()} SYSTEM READY. AWAITING INPUT... +++`;
-    
+
     // Setze auch den internen Track-Pointer zurück (damit der erste Klick auf "Next" oder "Play" klappt)
     trackData = [];
     currentTrackIndex = 0;
@@ -235,14 +263,11 @@ async function selectAndPlayTrack(index, system) {
             trackData.digidrums = parsedFile.digidrums; // Wird ans Worklet geschickt
             trackData.isYmFile = true; // Identifikator für startPlayback()
             
-            // Metadaten ins HTML-Museum zeichnen! (INKLUSIVE LED)
+            // Metadaten ins HTML-Museum zeichnen!
             let meta = parsedFile.metadata;
             let dynamicHTML = `
                 <div style="margin-top: 15px; padding: 10px; background: rgba(0,0,0,0.3); border: 1px dotted currentColor; position: relative;">
-                    
-                    <!-- NEU: DIE DIGIDRUM LED -->
                     <div id="digi-led" style="position: absolute; top: 10px; right: 10px; width: 12px; height: 12px; border-radius: 50%; background: #440000; border: 1px solid #ff0000; box-shadow: none; transition: background 0.05s;"></div>
-                    
                     <p style="color: var(--highlight-color); margin-bottom: 8px;"><strong>[ FILE METADATA ]</strong></p>
                     <p><strong>Title:</strong> ${meta.name}</p>
                     <p><strong>Author:</strong> ${meta.author}</p>
@@ -251,7 +276,8 @@ async function selectAndPlayTrack(index, system) {
             `;
 
             document.getElementById('info-text').innerHTML = `
-                <div style="margin-bottom: 20px;">
+                ${systemDescriptions[system]} <!-- NEU: Das permanente Handbuch -->
+                <div style="margin-bottom: 10px; margin-top: 20px;">
                     <h2 style="color: var(--highlight-color);">> NOW PLAYING:</h2>
                     <p style="font-size: 1.2em; border-bottom: 1px solid currentColor; padding-bottom: 5px;">${selectedSong.title}</p>
                 </div>
@@ -266,8 +292,17 @@ async function selectAndPlayTrack(index, system) {
             alert("FEHLER BEIM LADEN: " + err.message);
             currentScrollerText = "+++ ERROR LOADING FILE +++";
         }
-    } else {
+} else {
         // Der alte Weg (Generatoren)
+        document.getElementById('info-text').innerHTML = `
+            ${systemDescriptions[system]} <!-- NEU: Das permanente Handbuch -->
+            <div style="margin-bottom: 10px; margin-top: 20px;">
+                <h2 style="color: var(--highlight-color);">> NOW PLAYING:</h2>
+                <p style="font-size: 1.2em; border-bottom: 1px solid currentColor; padding-bottom: 5px;">${selectedSong.title}</p>
+            </div>
+            ${selectedSong.composerInfo}
+            <p class="blinking-cursor" style="margin-top: 15px;">_</p>
+        `;
         trackData = selectedSong.generator();
         startPlayback();
     }
