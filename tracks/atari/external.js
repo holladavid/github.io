@@ -5,7 +5,8 @@ const myYmFiles = [
     "thalion_loader.ym",           // Dein erster Test-Song
     "turrican1_world_1_1.ym",      // Lade hier deine entpackten Lieblingstracks rein...
     "WINGLEV1.ym",               // ...
-    "GOLDRUN.ym"
+    "GOLDRUN.ym",
+    "spherical_intro.ym"
 ];
 
 // Wir generieren mit .map() automatisch für jeden Namen einen fertigen Track-Eintrag!
