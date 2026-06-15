@@ -13,6 +13,7 @@ let currentFrame = 0;
 let isPlaying = false; 
 let currentTrackIndex = 0;
 let currentScrollerText = "+++ INITIALIZING DEMO ENGINE... +++";
+let lastKnownFrame = 0; // NEU: Merkt sich den Frame für die Timeline
 
 // --- BOOT SEQUENZ (Modul-sicher) ---
 function initApp() {
@@ -72,7 +73,11 @@ async function initAudioEngine() {
         sidNode.connect(masterGain); 
         
         const visualHandler = (e) => {
-            if (e.data.type === 'VISUAL_DATA') currentOscValue = e.data.value;
+            if (e.data.type === 'VISUAL_DATA') {
+                currentOscValue = e.data.value;
+                lastKnownFrame = e.data.frame || 0; // Frame aus dem Worklet speichern
+                updateTimelineUI(); // Timeline aktualisieren
+            }
         };
         ymNode.port.onmessage = paulaNode.port.onmessage = sidNode.port.onmessage = visualHandler;
 
@@ -86,6 +91,23 @@ function uploadAmigaSamples() {
         paulaNode.port.postMessage({ type: 'UPLOAD_SAMPLE', name: 'bass', data: createBassSample() });
         paulaNode.port.postMessage({ type: 'UPLOAD_SAMPLE', name: 'chord', data: createChordSample() });
     }
+}
+
+// Wandelt Frames (50Hz) in ein "MM:SS" Format um
+function formatTime(frames) {
+    if (!frames) return "00:00";
+    let totalSeconds = Math.floor(frames / 50);
+    let mins = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+    let secs = (totalSeconds % 60).toString().padStart(2, '0');
+    return `${mins}:${secs}`;
+}
+
+// Aktualisiert den Balken und die Zeiten
+function updateTimelineUI() {
+    if (!isPlaying || trackData.length === 0) return;
+    document.getElementById('time-current').innerText = formatTime(lastKnownFrame);
+    document.getElementById('time-total').innerText = formatTime(trackData.length);
+    document.getElementById('progress-slider').value = (lastKnownFrame / trackData.length) * 100;
 }
 
 // --- PLAYER LOGIK ---
@@ -161,25 +183,15 @@ function renderTracklist(system) {
     });
 }
 
-function selectAndPlayTrack(index, system) {
+async function selectAndPlayTrack(index, system) {
     const songs = trackRegistry[system];
     if (!songs || !songs[index]) return;
 
     stopPlayback();
     currentTrackIndex = index;
     const selectedSong = songs[index];
-    trackData = selectedSong.generator();
     
     renderTracklist(system); 
-
-    // Update den System-Header im Museum
-    const headerTitles = {
-        'c64': '>>> INFO: MOS Technology SID 6581',
-        'amiga': '>>> INFO: MOS Paula 8364',
-        'atari': '>>> INFO: Yamaha YM2149 (Atari ST)'
-    };
-    document.querySelector('.museum-header').innerText = headerTitles[system];
-
     document.getElementById('info-text').innerHTML = `
         <div style="margin-bottom: 20px;">
             <h2 style="color: var(--highlight-color);">> NOW PLAYING:</h2>
@@ -190,7 +202,23 @@ function selectAndPlayTrack(index, system) {
     `;
     
     currentScrollerText = "+++ NOW PLAYING: " + selectedSong.title + " +++";
-    startPlayback();
+    
+    // NEU: Asynchrones Laden von echten Dateien unterstützen!
+    if (selectedSong.loadAsync) {
+        currentScrollerText = "+++ DOWNLOADING AND PARSING BINARY YM FILE... +++";
+        try {
+            trackData = await selectedSong.loadAsync();
+            currentScrollerText = "+++ PARSING SUCCESSFUL! NOW PLAYING YM FILE... +++";
+            startPlayback();
+        } catch (err) {
+            alert("FEHLER BEIM LADEN: " + err.message);
+            currentScrollerText = "+++ ERROR LOADING FILE +++";
+        }
+    } else {
+        // Der alte Weg (Generatoren)
+        trackData = selectedSong.generator();
+        startPlayback();
+    }
 }
 
 // --- EVENTS ---
