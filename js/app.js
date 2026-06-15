@@ -113,18 +113,37 @@ function stopPlayback() {
 // --- UI & THEME LOGIK ---
 function setTheme(themeName) {
     document.body.className = themeName;
-    
-    // Die Tabs visuell umschalten (Prüft nun das data-theme Attribut)
-    document.querySelectorAll('.tab-btn').forEach(tab => {
+    const tabs = document.querySelectorAll('.tab-btn');
+    tabs.forEach(tab => {
         tab.classList.remove('active');
-        if (tab.getAttribute('data-theme') === themeName) {
-            tab.classList.add('active');
-        }
+        if (tab.getAttribute('data-theme') === themeName) tab.classList.add('active');
     });
 
     activeSystem = themeName === 'theme-atari' ? 'atari' : themeName === 'theme-amiga' ? 'amiga' : 'c64';
+    
+    // 1. Playback stoppen und Tracklist neu zeichnen
     renderTracklist(activeSystem);
     stopPlayback(); 
+
+    // 2. BUGFIX: Den Header im Museum sofort an das neue System anpassen
+    const headerTitles = {
+        'c64': '>>> INFO: MOS Technology SID 6581',
+        'amiga': '>>> INFO: MOS Paula 8364',
+        'atari': '>>> INFO: Yamaha YM2149 (Atari ST)'
+    };
+    document.querySelector('.museum-header').innerText = headerTitles[activeSystem];
+
+    // 3. BUGFIX: Das Museum und den Scroller auf "Warten" setzen, bis ein Track geklickt wird
+    document.getElementById('info-text').innerHTML = `
+        <p style="color: var(--highlight-color);">[ SYSTEM READY ]</p>
+        <p>Please select a track from the playlist to initialize playback and load data into memory...</p>
+        <p class="blinking-cursor" style="margin-top: 15px;">_</p>
+    `;
+    currentScrollerText = `+++ ${activeSystem.toUpperCase()} SYSTEM READY. AWAITING INPUT... +++`;
+    
+    // Setze auch den internen Track-Pointer zurück (damit der erste Klick auf "Next" oder "Play" klappt)
+    trackData = [];
+    currentTrackIndex = 0;
 }
 
 function renderTracklist(system) {
@@ -152,6 +171,15 @@ function selectAndPlayTrack(index, system) {
     trackData = selectedSong.generator();
     
     renderTracklist(system); 
+
+    // Update den System-Header im Museum
+    const headerTitles = {
+        'c64': '>>> INFO: MOS Technology SID 6581',
+        'amiga': '>>> INFO: MOS Paula 8364',
+        'atari': '>>> INFO: Yamaha YM2149 (Atari ST)'
+    };
+    document.querySelector('.museum-header').innerText = headerTitles[system];
+
     document.getElementById('info-text').innerHTML = `
         <div style="margin-bottom: 20px;">
             <h2 style="color: var(--highlight-color);">> NOW PLAYING:</h2>
