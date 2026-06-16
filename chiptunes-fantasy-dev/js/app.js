@@ -6,6 +6,7 @@ import { createKickSample, createBassSample, createChordSample } from './utils/a
 let audioCtx;
 let ymNode, paulaNode, sidNode; 
 let masterGain;
+let analyserNode; // NEU: Für die FFT Frequenz-Analyse
 let currentOscValue = 0; 
 let activeSystem = 'atari';
 let trackData = [];    
@@ -41,19 +42,26 @@ const systemDescriptions = {
     `
 };
 
-// --- BOOT SEQUENZ (Modul-sicher) ---
+// --- BOOT SEQUENZ (Modul-sicher & Bulletproof) ---
 function initApp() {
-    const bootScreen = document.getElementById("boot-screen");
-    const demoContainer = document.getElementById("demo-container");
-
-    // Event-Listener für die neuen Tabs (Bindung in JS, nicht in HTML!)
+    // Event-Listener für die neuen Tabs (Bindung in JS)
     document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             setTheme(e.target.getAttribute('data-theme'));
         });
     });
 
+    const bootScreen = document.getElementById("boot-screen");
+    
     bootScreen.addEventListener("click", async () => {
+        // BUGFIX: Wir suchen den Container erst genau jetzt beim Klick!
+        const demoContainer = document.getElementById("demo-container");
+        
+        if (!demoContainer) {
+            alert("FEHLER: HTML Element 'demo-container' fehlt in der index.html!");
+            return;
+        }
+
         bootScreen.classList.add("hidden");
         demoContainer.classList.remove("hidden");
         
@@ -90,14 +98,24 @@ async function initAudioEngine() {
         amigaFilter.type = 'lowpass';
         amigaFilter.frequency.value = 6000; 
 
+
+        // --- MASTER VOLUME & FFT ANALYZER ---
+        analyserNode = audioCtx.createAnalyser();
+        analyserNode.fftSize = 4096; // NERD-PERFEKTION: 11,7 Hz Auflösung pro Bin!
+
         masterGain = audioCtx.createGain();
         masterGain.gain.value = 0.5; 
-        masterGain.connect(audioCtx.destination);
         
+        // Routing: Chips -> MasterGain -> Analyser -> Lautsprecher
         ymNode.connect(masterGain);
         paulaNode.connect(amigaFilter).connect(masterGain);
         sidNode.connect(masterGain); 
         
+        masterGain.connect(analyserNode);
+        analyserNode.connect(audioCtx.destination);
+        
+
+
         const visualHandler = (e) => {
             if (e.data.type === 'VISUAL_DATA') {
                 currentOscValue = e.data.value;
@@ -334,15 +352,25 @@ document.getElementById('volume-slider').addEventListener('input', (e) => {
     if (masterGain) masterGain.gain.value = e.target.value;
 });
 
-// --- VISUALS ---
+// --- ZONE 1: HIGH-PERFORMANCE OSZILLOSKOP, RASTERBARS & SPECTRUM ---
 function initVisuals() {
     const canvas = document.getElementById('demo-canvas');
     const ctx = canvas.getContext('2d', { alpha: false }); 
-    canvas.width = canvas.clientWidth; canvas.height = canvas.clientHeight;
+    canvas.width = canvas.clientWidth; 
+    canvas.height = canvas.clientHeight;
+    
     const historyLength = canvas.width; 
     const oscHistory = new Float32Array(historyLength);
     let oscIndex = 0; 
     let startTime = performance.now();
+
+    // FFT Setup
+    const bufferLength = analyserNode ? analyserNode.frequencyBinCount : 512;
+    const dataArray = new Uint8Array(bufferLength);
+    
+    // Für den Hardware-EQ Look (Winamp Style)
+    const barCount = 48; 
+    const peaks = new Array(barCount).fill(0); // Speichert die Höhe der kleinen "Hütchen"
 
     function drawCopperBar(yCenter, thickness, color1, color2) {
         let grad = ctx.createLinearGradient(0, yCenter - thickness, 0, yCenter + thickness);
@@ -354,14 +382,18 @@ function initVisuals() {
 
     function draw() {
         let t = (performance.now() - startTime) * 0.001; 
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.4)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.4)'; 
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
         
         let audioPunch = Math.abs(currentOscValue) * 40; 
         const isAmiga = document.body.classList.contains('theme-amiga');
         const isAtari = document.body.classList.contains('theme-atari');
+        
         let pal1 = isAtari ? ['#005500', '#00aa00'] : isAmiga ? ['#0000aa', '#0055ff'] : ['#352879', '#6c5eb5'];
         let pal2 = isAtari ? ['#555500', '#aaaa00'] : isAmiga ? ['#aa5500', '#ff8800'] : ['#aa0055', '#ff00aa'];
         let pal3 = isAtari ? ['#005555', '#00aaaa'] : isAmiga ? ['#5500aa', '#aa00ff'] : ['#555555', '#aaaaaa'];
+        const lineColor = isAtari ? '#55ff55' : isAmiga ? '#ff8800' : '#6c5eb5';
 
         ctx.globalCompositeOperation = "screen"; 
         drawCopperBar((canvas.height / 2) + Math.sin(t * 1.2) * (canvas.height * 0.3), 25 + audioPunch, pal1[0], pal1[1]);
@@ -371,8 +403,9 @@ function initVisuals() {
 
         oscHistory[oscIndex] = currentOscValue;
         oscIndex = (oscIndex + 1) % historyLength; 
+        
         ctx.beginPath();
-        ctx.strokeStyle = isAtari ? '#55ff55' : isAmiga ? '#ff8800' : '#6c5eb5';
+        ctx.strokeStyle = lineColor;
         for (let x = 0; x < historyLength; x++) {
             let actualIndex = (oscIndex + x) % historyLength; 
             let y = (canvas.height / 2) - (oscHistory[actualIndex] * (canvas.height * 0.4)); 
@@ -380,6 +413,72 @@ function initVisuals() {
         }
         ctx.lineWidth = 6; ctx.globalAlpha = 0.3; ctx.stroke();
         ctx.lineWidth = 2; ctx.globalAlpha = 1.0; ctx.stroke();
+
+// --- 4. DER LOGARITHMISCHE SPECTRUM ANALYZER (Nerd Perfection) ---
+        if (analyserNode && isPlaying) {
+            analyserNode.getByteFrequencyData(dataArray);
+            
+            let barWidth = (canvas.width / barCount) - 2;
+            let x = 0;
+            
+            // Frequenz-Fenster definieren (z.B. 50 Hz bis 12.000 Hz)
+            // Bei 48.000Hz Samplerate und FFT 4096 entspricht ein Bin ca. 11.7 Hz
+            // audioCtx.sampleRate ist meist 48000
+            let hzPerBin = audioCtx.sampleRate / analyserNode.fftSize;
+            let minBin = Math.max(1, Math.floor(50 / hzPerBin)); // Startet bei ca. 50 Hz
+            let maxBin = Math.floor(12000 / hzPerBin); // Endet bei ca. 12 kHz
+            
+            let lastEndBin = minBin;
+            
+            for (let i = 0; i < barCount; i++) {
+                let startBin = lastEndBin;
+                
+                // Echte logarithmische Frequenz-Spreizung (Oktaven-basiert)
+                // Die Formel: end = min * (max/min) ^ (i / (bars-1))
+                let endBin = Math.floor(minBin * Math.pow(maxBin / minBin, (i + 1) / barCount));
+                
+                // Absolute Sicherheit: Kein Balken darf denselben Bin lesen wie sein Nachbar!
+                if (endBin <= startBin) endBin = startBin + 1;
+                lastEndBin = endBin;
+                
+                // Durchschnittliche Amplitude in diesem Frequenzbereich berechnen
+                let sum = 0;
+                for (let b = startBin; b < endBin; b++) {
+                    sum += dataArray[b];
+                }
+                let avg = sum / (endBin - startBin);
+                
+                // Sanfte Anhebung der Höhen (High-Shelf EQ visuell simulieren), 
+                // da hohe Frequenzen mathematisch weniger Energie haben als fette Bässe
+                let heightBoost = 1.0 + (i / barCount) * 0.5;
+                
+                let barHeight = ((avg * heightBoost) / 255.0) * (canvas.height * 0.4);
+                
+                // Schwerkraft für die Peak-Hütchen
+                if (barHeight > peaks[i]) {
+                    peaks[i] = barHeight; 
+                } else {
+                    peaks[i] -= 1.5; 
+                    if (peaks[i] < 0) peaks[i] = 0;
+                }
+                
+                // Balken zeichnen
+                ctx.fillStyle = lineColor;
+                ctx.globalAlpha = 0.7;
+                ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+                
+                // Peak-Hütchen zeichnen
+                if (peaks[i] > 2) {
+                    ctx.globalAlpha = 1.0;
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(x, canvas.height - peaks[i] - 4, barWidth, 2);
+                }
+                
+                x += barWidth + 2;
+            }
+            ctx.globalAlpha = 1.0;
+        }
+        
         requestAnimationFrame(draw);
     }
     draw();

@@ -15,13 +15,20 @@
         <h1 class="blink">[ INSERT DISK AND CLICK TO START ]</h1>
     </div>
 
+    <!-- HIER FEHLTE DIESE ZEILE: -->
     <div id="demo-container" class="hidden">
-        
+
+        <!-- ZONE 1: Das Spektakel (40% Höhe) -->
         <div id="visual-zone">
             <canvas id="demo-canvas"></canvas>
-            <div class="scanlines"></div> 
-        </div>
+            
+            <!-- NEU: Das nerdige Hardware-HUD -->
+            <div id="chip-hud">
+                <div id="hud-content">INITIALIZING DSP SENSORS...</div>
+            </div>
 
+            <div class="scanlines"></div> <!-- CRT Monitor Effekt -->
+        </div>
         <div id="ui-zone">
             <div id="player-panel">
                 

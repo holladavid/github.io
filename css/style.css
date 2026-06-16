@@ -274,3 +274,46 @@ body, html {
     height: 100%;
     display: block;
 }
+
+/* --- CHIP HUD (Register Visualisierung) --- */
+#chip-hud {
+    position: absolute;
+    top: 15px;
+    right: 15px;
+    width: 320px;
+    background: rgba(0, 0, 0, 0.6);
+    border: 1px solid var(--text-color);
+    box-shadow: 0 0 10px rgba(0,0,0,0.5);
+    padding: 10px;
+    color: var(--highlight-color);
+    font-size: calc(var(--font-size-base) * 0.8);
+    pointer-events: none; /* Klicks gehen durch das HUD hindurch zum Canvas */
+    z-index: 10;
+}
+
+#chip-hud h3 {
+    border-bottom: 1px dotted var(--text-color);
+    padding-bottom: 5px;
+    margin-bottom: 10px;
+    color: var(--text-color);
+}
+
+/* Die Matrix für die Hex-Werte */
+.hud-grid {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 4px;
+    margin-bottom: 10px;
+}
+
+.hud-cell {
+    background: rgba(255, 255, 255, 0.1);
+    text-align: center;
+    padding: 2px;
+}
+
+.hud-label {
+    color: var(--text-color);
+    display: inline-block;
+    width: 80px;
+}
