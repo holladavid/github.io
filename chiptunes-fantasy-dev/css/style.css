@@ -362,12 +362,25 @@ body, html {
     margin-bottom: 5px;
     font-size: calc(var(--font-size-base) * 0.75);
 }
+/* Ersetze diese Klassen im Atari-Bereich der style.css: */
 .hud-row label {
     flex-shrink: 0;
-    width: 65px; /* Kompakter, damit der Balken Platz hat */
+    width: 60px; /* Etwas kompakter */
     color: var(--text-color);
     opacity: 0.8;
 }
+
+/* Der neue Container für unser Echtzeit-Liniendiagramm */
+.hud-sparkline {
+    flex-grow: 1;
+    height: 18px;
+    background: rgba(0,0,0,0.5);
+    margin-right: 8px;
+    border: 1px solid rgba(255,255,255,0.2);
+    display: block; /* Wichtig für Canvas */
+}
+
+/* Wir behalten den alten Balken für die Volume-Anzeige! */
 .hud-bar {
     flex-grow: 1;
     height: 6px;
@@ -382,12 +395,15 @@ body, html {
     width: 0%; 
     transition: width 0.05s linear; 
 }
+
+/* Breiteres Textfeld für "12500 Hz", verhindert Zeilenumbruch! */
 .hud-val {
     flex-shrink: 0;
-    width: 35px; /* Fester Platz für die Zahlen (max 4095) */
+    width: 75px; /* <--- HIER VON 55px AUF 75px ÄNDERN */
     text-align: right;
     font-family: 'Press Start 2P', monospace; 
     font-size: 8px;
+    color: var(--highlight-color);
 }
 .hud-led {
     flex-shrink: 0;
