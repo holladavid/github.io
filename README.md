@@ -10,9 +10,11 @@ https://holladavid.github.io/Chiptunes-Fantasy/
 
 *Chiptones-Fantasy* is a passion project built to revive the golden era of 8-bit and 16-bit chiptunes using **pure JavaScript and HTML5** — no heavy frameworks, no bloated libraries, and absolutely no pre-recorded MP3s. Just raw binary parsing, accurate hardware emulation, and pure math running at a rock-solid 50Hz VBLANK.
 
+> **🚧 CURRENT DEVELOPMENT FOCUS:**  
+> While the core architecture is built to support the big three (Amiga, C64, Atari), our active deep-dive right now is the **Atari ST (YM2149)**. We are currently perfecting the binary `.ym` parsers, cycle-accurate Digidrum hacks, and hardware envelope (HEG) magic before expanding the Amiga and C64 loaders.
+
 ## 🚀 The Vision & Tribute
 This project is a love letter to the audio wizards of the 80s and 90s — legends like Jochen Hippel, Rob Hubbard, and Chris Hülsbeck. They didn't just compose music; they hacked the hardware. They abused CPU timers, manipulated pulse widths, and wrote their own drivers to make simple programmable sound generators sound like entire orchestras.
-
 *Chiptunes-Fantasy* makes these genius programming tricks tangible. We don't just play the music; we expose the guts of the hardware in real-time, honoring the artists and educating the nerds.
 
 ## 🎛️ Current Features
