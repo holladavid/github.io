@@ -17,6 +17,15 @@ let currentTrackIndex = 0;
 let currentScrollerText = "+++ INITIALIZING DEMO ENGINE... +++";
 let lastKnownFrame = 0; 
 
+// --- YM2149 NOISE FREQUENCY LOOKUP TABLE (2 MHz Clock) ---
+// 32 diskrete Werte für die 5 Bits (0 - 31). Periode 0 wird als 1 behandelt.
+const NOISE_LUT_HZ = [
+    125000, 125000,  62500,  41667,  31250,  25000,  20833,  17857,
+     15625,  13889,  12500,  11364,  10417,   9615,   8929,   8333,
+      7813,   7353,   6944,   6579,   6250,   5952,   5682,   5435,
+      5208,   5000,   4808,   4630,   4464,   4310,   4167,   4032
+];
+
 // --- DIE PERMANENTEN HARDWARE-HANDBÜCHER ---
 const systemDescriptions = {
     c64: `
@@ -33,12 +42,29 @@ const systemDescriptions = {
             <p style="margin-top: 8px;"><strong>🔥 Szene-Hack (Software-Mixing):</strong> Um das starre Hard-Panning (1&4 links, 2&3 rechts) und das 4-Kanal-Limit zu überwinden, mischten geniale Programmierer (wie Chris Hülsbeck) per CPU mehrere Samples zusammen, um 7-stimmige Polyphonie zu erreichen.</p>
         </div>
     `,
-    atari: `
-        <div style="border: 1px solid var(--text-color); padding: 10px; margin-bottom: 15px; background: rgba(0,0,0,0.2);">
-            <h3 style="color: var(--highlight-color); margin-bottom: 5px;">[ CHIP-SPECS: YAMAHA YM2149F ]</h3>
-            <p>Ein Klon des AY-3-8910, der im Atari ST mit 2.000.000 Hz getaktet war. Ein reiner Programmable Sound Generator (PSG) mit 3 Rechteck-Oszillatoren, 1 Noise-Generator (5-Bit LFSR) und 1 Hardware Envelope Generator (HEG, 16 feste Hüllkurven-Shapes). Er bot <em>keinen</em> PCM-Kanal und <em>keine</em> analogen Filter.</p>
-            <p style="margin-top: 8px;"><strong>🔥 Szene-Hack 1 (Digidrums):</strong> Um PCM abzuspielen, hackten Coder CPU-Timer (oft 12.5 kHz), um das 4-Bit-Lautstärkeregister direkt zu überschreiben. Arnaud Carré (Leonard) versteckte diese Trigger für das <code>.ym</code> Format genial in den physikalisch ungenutzten Bits (Bit 4-7) der Frequenzregister.</p>
-            <p style="margin-top: 8px;"><strong>🔥 Szene-Hack 2 (HEG Speech Synthesis):</strong> Für das Thalion-Intro nutzte Jochen Hippel <em>gar keine Samples!</em> Er missbrauchte den Hardware Envelope Generator (Register 13). Durch das Neustarten der Hardware-Hüllkurve in Audio-Geschwindigkeit verformte er die Rechteckwelle so massiv, dass der Chip wie menschliche Stimmbänder klang ("Tha-li-on") – reine Mathematik, 0 Kilobyte Speicherplatz!</p>
+atari: `
+        <div style="border: 1px solid var(--text-color); padding: 15px; margin-bottom: 15px; background: rgba(0,0,0,0.3); line-height: 1.6;">
+            <h3 style="color: var(--highlight-color); margin-bottom: 15px; border-bottom: 1px dashed var(--text-color); padding-bottom: 5px;">[ DEEP DIVE: YM2149F ARCHITEKTUR ]</h3>
+            <p>Der Yamaha YM2149 (im Atari ST mit 2 MHz getaktet) ist ein puristischer Rechteck-Synthesizer. Er hat keine analogen Filter, aber eine geniale, rohe digitale Architektur. Hier erfährst du, was die Live-Werte im DSP-Analyzer (oben rechts) bedeuten:</p>
+
+            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> DIE OSZILLATOREN (CH A, B, C)</h4>
+            <p>Drei reine Rechteckwellen. Die Tonhöhe (Pitch) wird über einen 12-Bit Timer gesteuert. <em>Vorsicht, Counter-Logic:</em> Es ist ein Teiler-Wert! Je kleiner die Zahl im Register, desto höher der Ton (Hertz = Takt / (16 * Period)).</p>
+
+            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> DER NOISE-GENERATOR (N-FREQ)</h4>
+            <p>Ein 5-Bit Linear Feedback Shift Register (LFSR), das pseudozufälliges "weißes Rauschen" generiert. Die Frequenz bestimmt, wie "hell" oder "dumpf" das Rauschen klingt.<br>
+            <strong>🎵 Szene-Trick:</strong> Musiker wie <em>Big Alec</em> änderten die Noise-Frequenz rasend schnell, um aus dem statischen Rauschen knackige Snare-Drums und zischende Hi-Hats zu formen.</p>
+
+            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> DER MIXER (TONE & NOISE)</h4>
+            <p>Das logische Herz des Chips. Für jeden der 3 Kanäle kann man Rechteckwelle (Tone) und Rauschen (Noise) separat ein- oder ausschalten (siehe die kleinen LEDs in der Matrix).<br>
+            <strong>🎵 Szene-Trick:</strong> Legt man auf einen Kanal Tone UND Noise gleichzeitig, entsteht ein rauer, metallischer Klang – perfekt für elektronische Percussion oder brachiale, schmutzige Bass-Hits.</p>
+
+            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> HARDWARE ENVELOPE GENERATOR (HEG)</h4>
+            <p>Eigentlich dazu gedacht, die Lautstärke eines Kanals automatisch (ohne CPU-Last) ansteigen und abfallen zu lassen. Es gibt 16 vordefinierte Formen (Shapes) wie Sägezahn (<code>/|/|</code>) oder Dreieck (<code>/\\/\\</code>). Ein Kanal nutzt den HEG anstelle der normalen Lautstärke, wenn die kleine <strong>HEG-LED</strong> im HUD leuchtet.<br>
+            <strong>🔥 Der Hippel-Hack:</strong> Jochen Hippel setzte die HEG-Frequenz so extrem hoch an, dass die Hüllkurve selbst zu einer hörbaren Audio-Frequenz wurde! Er nutzte die wilden HEG-Shapes, um aus der Rechteckwelle komplexe Klänge wie die menschliche Stimme ("Tha-li-on" Intro) oder den legendären "Sync-Buzzer" zu formen.</p>
+
+            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> PCM SAMPLES (DIGI HACK)</h4>
+            <p>Hardwareseitig unterstützt der Chip <strong>keine</strong> Sprachsamples. Coder nutzten CPU-Timer, um 12.000 Mal pro Sekunde das Lautstärkeregister direkt zu überschreiben.<br>
+            <strong>💾 Format-Geheimnis:</strong> Um diese PCM-Trigger in kleinen <code>.ym</code> Dateien zu speichern, versteckte Arnaud Carré (Leonard) die Sample-Nummer genial in den physikalisch ungenutzten Bits (Bit 4-7) der Pitch-Register. Sobald du im HUD "SMP #1" liest und die rote LED zuckt, feuert die Engine genau diesen Hack ab!</p>
         </div>
     `
 };
@@ -582,12 +608,21 @@ function updateChipHUD() {
         // Ringpuffer weiterdrehen
         histIdx = (histIdx + 1) % HIST_LEN;
 
-        // NOISE (Hertz Berechnung!)
+        // NOISE (5-Bit Lookup Table anwenden!)
         let noiseP = r[6] & 0x1F;
-        let noiseHz = noiseP === 0 ? 0 : 2000000 / (16 * noiseP);
-        document.getElementById('noise-bar').style.width = (noiseP / 31 * 100) + '%';
-        document.getElementById('noise-val').innerText = Math.round(noiseHz) + ' Hz';
+        let exactHz = NOISE_LUT_HZ[noiseP];
         
+        // Dynamische Formatierung, damit es sauber in die 75px Box passt
+        let noiseStr = "";
+        if (exactHz >= 10000) {
+            noiseStr = (exactHz / 1000).toFixed(1) + " kHz"; // Aus 125000 wird "125.0 kHz"
+        } else {
+            noiseStr = exactHz + " Hz"; // Aus 8333 wird "8333 Hz"
+        }
+
+        document.getElementById('noise-bar').style.width = (noiseP / 31 * 100) + '%';
+        document.getElementById('noise-val').innerText = noiseStr;
+
         let mix = r[7];
         document.getElementById('tone-a-led').className = (mix & 0x01) === 0 ? 'hud-led on' : 'hud-led';
         document.getElementById('tone-b-led').className = (mix & 0x02) === 0 ? 'hud-led on' : 'hud-led';
