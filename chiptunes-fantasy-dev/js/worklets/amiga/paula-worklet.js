@@ -27,7 +27,9 @@ class PaulaProcessor extends AudioWorkletProcessor {
                 this.isPlaying = true;
             } else if (msg.type === 'STOP_TRACK') {
                 this.isPlaying = false;
-                for (let c of this.channels) { c.data = null; c.vol = 0; }
+                // Auch hier: Kanäle nicht mehr nullen!
+            } else if (msg.type === 'RESUME_TRACK') {
+                this.isPlaying = true;
             }
         };
     }
@@ -38,6 +40,15 @@ class PaulaProcessor extends AudioWorkletProcessor {
         let oscValue = 0;
 
         for (let i = 0; i < outL.length; i++) {
+            
+            // ECHTE PAUSE
+            if (!this.isPlaying) {
+                outL[i] = 0;
+                if (outR) outR[i] = 0;
+                continue; 
+            }
+            
+            // --- AMIGA HARDWARE SEQUENZER ---
             
             // --- AMIGA HARDWARE SEQUENZER ---
             if (this.isPlaying && this.trackData) {

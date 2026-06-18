@@ -171,8 +171,8 @@ function updateTimelineUI() {
     document.getElementById('progress-slider').value = (lastKnownFrame / trackData.length) * 100;
 }
 
-// --- PLAYER LOGIK ---
-function startPlayback() {
+// --- DER NEUE HIGH-PRECISION PLAYER ---
+function startPlayback() { // Startet immer einen NEUEN Track bei Frame 0
     if (isPlaying || trackData.length === 0) return;
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
 
@@ -185,12 +185,19 @@ function startPlayback() {
     } else if (isC64) {
         sidNode.port.postMessage({ type: 'PLAY_TRACK', track: trackData });
     } else {
-        ymNode.port.postMessage({ 
-            type: 'PLAY_TRACK', 
-            track: trackData, 
-            digidrums: trackData.digidrums 
-        });
+        ymNode.port.postMessage({ type: 'PLAY_TRACK', track: trackData, digidrums: trackData.digidrums });
     }
+}
+
+// NEU: Setzt das Playback exakt dort fort, wo es eingefroren wurde!
+function resumePlayback() {
+    if (isPlaying || trackData.length === 0) return;
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+
+    isPlaying = true;
+    if (activeSystem === 'amiga') paulaNode.port.postMessage({ type: 'RESUME_TRACK' });
+    else if (activeSystem === 'c64') sidNode.port.postMessage({ type: 'RESUME_TRACK' });
+    else ymNode.port.postMessage({ type: 'RESUME_TRACK' });
 }
 
 function stopPlayback() {
@@ -345,9 +352,14 @@ async function selectAndPlayTrack(index, system) {
 
 // --- BUTTON EVENTS ---
 document.getElementById('btn-play').addEventListener('click', () => {
-    if (isPlaying) stopPlayback();
-    else trackData.length === 0 ? selectAndPlayTrack(0, activeSystem) : startPlayback();
+    if (isPlaying) {
+        stopPlayback(); // Pausiert das Lied
+    } else {
+        // Entweder neuen Song laden, oder den pausierten weiterspielen!
+        trackData.length === 0 ? selectAndPlayTrack(0, activeSystem) : resumePlayback();
+    }
 });
+
 document.getElementById('btn-next').addEventListener('click', () => {
     selectAndPlayTrack((currentTrackIndex + 1) % trackRegistry[activeSystem].length, activeSystem);
 });

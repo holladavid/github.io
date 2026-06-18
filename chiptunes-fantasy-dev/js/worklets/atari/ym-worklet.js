@@ -32,9 +32,9 @@ class YMProcessor extends AudioWorkletProcessor {
                 this.isPlaying = true;
             } else if (event.data.type === 'STOP_TRACK') {
                 this.isPlaying = false;
-                for(let r=0; r<16; r++) this.regs[r] = 0;
-                this.regs[7] = 0xFF; 
-                this.currentDigidrum = null;
+                // WICHTIG: Die Register bleiben erhalten, wir löschen nichts mehr!
+            } else if (event.data.type === 'RESUME_TRACK') {
+                this.isPlaying = true; // Wieder aufwecken!
             }
         };
     }
@@ -54,6 +54,13 @@ class YMProcessor extends AudioWorkletProcessor {
 
         for (let i = 0; i < channelLeft.length; i++) {
             
+            // ECHTE PAUSE: Zeit friert komplett ein, Phase stoppt!
+            if (!this.isPlaying) {
+                channelLeft[i] = 0;
+                if (channelRight) channelRight[i] = 0;
+                continue; 
+            }
+
             if (this.isPlaying && this.trackData) {
                 this.sampleCounter--;
                 if (this.sampleCounter <= 0) {

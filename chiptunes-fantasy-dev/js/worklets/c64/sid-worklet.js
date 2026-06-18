@@ -20,7 +20,9 @@ class SIDProcessor extends AudioWorkletProcessor {
                 this.isPlaying = true;
             } else if (e.data.type === 'STOP_TRACK') {
                 this.isPlaying = false;
-                this.regs[24] = 0; // Master vol 0
+                // Keine Register mehr löschen
+            } else if (e.data.type === 'RESUME_TRACK') {
+                this.isPlaying = true;
             }
         };
     }
@@ -37,6 +39,15 @@ class SIDProcessor extends AudioWorkletProcessor {
         let visualValue = 0;
 
         for (let i = 0; i < outL.length; i++) {
+            
+            // ECHTE PAUSE
+            if (!this.isPlaying) {
+                outL[i] = 0;
+                if (outR) outR[i] = 0;
+                continue; 
+            }
+            
+            // --- C64 HARDWARE SEQUENZER ---
             
             // --- C64 HARDWARE SEQUENZER ---
             if (this.isPlaying && this.trackData) {
