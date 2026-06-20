@@ -5,6 +5,15 @@ const myYmFiles = [
     "thalion_loader.YM",           // Dein erster Test-Song
     "turrican1_world_1_1.YM",      // Lade hier deine entpackten Lieblingstracks rein...
     "WINGLEV1.YM",               // ...
+    'WINGLEV2.YM',
+    'WINGLEV3.YM',
+    'WINGLEV4.YM',
+    'WINGLEV5.YM',
+    'WINGLEV6.YM',
+    'WINGLEV7.YM',
+    'WINGLEV8.YM',
+    'WINGLEV9.YM',
+    'WINGLOAD.YM',
     "GOLDRUN.YM",
     "spherical_intro.YM",
     "BIONIC1.YM",

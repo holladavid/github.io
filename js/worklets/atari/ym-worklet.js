@@ -198,7 +198,7 @@ class YMProcessor extends AudioWorkletProcessor {
                 let posInt = Math.floor(this.digiPos);
                 if (posInt < this.currentDigidrum.length) {
                     digiSample = this.currentDigidrum[posInt] * 2.0;
-                    this.digiPos += 12500 / sampleRate; 
+                    this.digiPos += 7812.5 / sampleRate; 
                 } else {
                     this.currentDigidrum = null; 
                 }
