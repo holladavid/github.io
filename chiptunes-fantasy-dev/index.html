@@ -20,6 +20,7 @@
 
         <!-- ZONE 1: Das Spektakel (40% Höhe) -->
         <div id="visual-zone">
+
             <canvas id="demo-canvas"></canvas>
             
             <!-- NEU: Das nerdige Hardware-HUD (Jetzt einklappbar!) -->
@@ -36,6 +37,16 @@
                 <div id="hud-body" class="hidden">
                     <div id="hud-matrix"></div>
                     <div id="hud-legend" class="hidden"></div>
+                </div>
+            </div>
+
+            <!-- NEU: PURE AUDIO OVERLAY -->
+            <div id="eco-overlay" class="hidden">
+                <div class="eco-box">
+                    <h2 class="blink">[ PURE AUDIO MODE ]</h2>
+                    <p>Visual processing suspended to conserve power.</p>
+                    <p>DSP Cores running at maximum priority.</p>
+                    <button id="btn-eco-off">WAKE UP</button>
                 </div>
             </div>
 
@@ -63,6 +74,7 @@
                     <button id="btn-prev">⏮</button>
                     <button id="btn-play">▶ / ⏸</button>
                     <button id="btn-next">⏭</button>
+                    <button id="btn-eco" title="Pure Audio Mode">ECO</button>
                 </div>
                 
                 <!-- NEU: Die Timeline (Dauer des Tracks) -->

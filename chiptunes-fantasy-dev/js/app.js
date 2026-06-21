@@ -20,6 +20,7 @@ let currentScrollerText = "+++ INITIALIZING DEMO ENGINE... +++";
 let lastKnownFrame = 0; 
 let previousFrame = 0;       // NEU: Merkt sich den vorherigen Frame für den Loop-Check
 let isAutoAdvancing = false; // NEU: Verhindert doppeltes Auslösen beim Trackwechsel
+let isEcoMode = false;      // NEU: Status für den Pure Audio Mode
 
 // --- YM2149 NOISE FREQUENCY LOOKUP TABLE (2 MHz Clock) ---
 // 32 diskrete Werte für die 5 Bits (0 - 31). Periode 0 wird als 1 behandelt.
@@ -111,20 +112,18 @@ async function loadEmuCore(system, coreConfig) {
             newNode.connect(masterGain);
         }
 
-        // Sensoren (HUD, Oszilloskop & Auto-Advance) anschließen
+// Sensoren (HUD, Oszilloskop & Auto-Advance) anschließen
         newNode.port.onmessage = (e) => {
             if (e.data.type === 'VISUAL_DATA') {
                 currentOscValue = e.data.value;
-                
-                // 1. Frame-Historie für den Loop-Detector speichern
                 previousFrame = lastKnownFrame;
                 lastKnownFrame = e.data.frame || 0; 
                 currentChipRegs = e.data.regs; 
 
-                // 2. AUTO-ADVANCE (Playlist Jukebox Modus)
+                // AUTO-ADVANCE (Jukebox Modus)
                 if (isPlaying && trackData.length > 0 && !isAutoAdvancing) {
                     if (previousFrame > trackData.length - 20 && lastKnownFrame < 10) {
-                        isAutoAdvancing = true; // Gegen Doppel-Trigger sperren
+                        isAutoAdvancing = true; 
                         let nextIdx = (currentTrackIndex + 1) % trackRegistry[activeSystem].length;
                         console.log(`Track zu Ende! Wechsle automatisch zu Track ${nextIdx}...`);
                         selectAndPlayTrack(nextIdx, activeSystem);
@@ -134,6 +133,9 @@ async function loadEmuCore(system, coreConfig) {
             
             // DIE REPARIERTE UND OPTIMIERTE ROTE NERD-LED!
             if (e.data.type === 'DEBUG') {
+                // NEU: Wenn PURE AUDIO an ist, ignorieren wir alle grafischen Trigger-Events!
+                if (isEcoMode) return; 
+
                 let match = e.data.msg.match(/Drum (\d+)/);
                 let drumNo = match ? "SMP #" + match[1] : "TRIG";
                 
@@ -425,6 +427,17 @@ document.getElementById('btn-prev').addEventListener('click', () => {
     if (prevIdx < 0) prevIdx = trackRegistry[activeSystem].length - 1;
     selectAndPlayTrack(prevIdx, activeSystem);
 });
+// --- PURE AUDIO / ECO MODE TOGGLE ---
+document.getElementById('btn-eco').addEventListener('click', () => {
+    isEcoMode = true;
+    document.getElementById('eco-overlay').classList.remove('hidden');
+});
+
+document.getElementById('btn-eco-off').addEventListener('click', () => {
+    isEcoMode = false;
+    document.getElementById('eco-overlay').classList.add('hidden');
+});
+
 document.getElementById('volume-slider').addEventListener('input', (e) => {
     if (masterGain) masterGain.gain.value = e.target.value;
 });
@@ -761,12 +774,21 @@ function initVisuals() {
     }
 
     function draw() {
+
+        // NEU: Wenn ECO Mode aktiv ist, zeichnen wir GAR NICHTS auf das Canvas!
+        if (isEcoMode) {
+            updateTimelineUI(); // Timeline soll natürlich weiterlaufen
+            requestAnimationFrame(draw);
+            return; // HIER BRECHEN WIR AB! GPU & CPU haben Pause!
+        }
+
         let t = (performance.now() - startTime) * 0.001; 
         
         ctx.fillStyle = 'rgba(0, 0, 0, 0.4)'; 
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         
-let audioPunch = Math.abs(currentOscValue) * 40; 
+        let audioPunch = Math.abs(currentOscValue) * 40; 
+
         // NEU: Der Airbag! Falls der Audiochip crasht (NaN), retten wir das Canvas!
         if (isNaN(audioPunch) || !isFinite(audioPunch)) audioPunch = 0;
 
@@ -854,6 +876,12 @@ function initScroller() {
     const baseGreets = " +++ AT LAST, THE ULTIMATE HTML5 MUSIC DISK IS COMPLETE +++ CODE & DSP MAGIK RUNNING AT A SOLID 50 HZ VBLANK +++ DEEP CHIP EMULATION VIA AUDIOWORKLETS +++ NO MP3, NO BULLSHIT, JUST PURE MATHEMATICS +++ GREETS FLY OUT TO ALL THE PIXEL PUSHERS, CYCLE CRUNCHERS AND WAVEFORM WIZARDS OUT THERE +++ TO EVERYONE WHO STILL KEEPS THE SPIRIT OF THE 8-BIT AND 16-BIT ERA ALIVE +++ TO THE TRUE LOVERS OF DEMOSCENE ART AND CHIPTUNE MAGIC +++ LET THE ANALOG FILTERS BURN +++ WRAP AROUND +++ ";
     
     function draw() {
+
+        if (isEcoMode) {
+            requestAnimationFrame(draw);
+            return; // Scroller-Berechnung stoppen!
+        }
+
         ctx.fillStyle = '#000000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
         const isAmiga = document.body.classList.contains('theme-amiga');
         const isAtari = document.body.classList.contains('theme-atari');
