@@ -324,6 +324,10 @@ function renderTracklist(system) {
 async function selectAndPlayTrack(index, system) {
     isAutoAdvancing = true; // NEU: Sperre aktivieren, während geladen wird
 
+    if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+
     const songs = trackRegistry[system];
     if (!songs || !songs[index]) {
         isAutoAdvancing = false;
@@ -416,22 +420,28 @@ async function selectAndPlayTrack(index, system) {
 
 // --- BUTTON EVENTS ---
 document.getElementById('btn-play').addEventListener('click', () => {
+    // NEU: iOS SAFARI FIX!
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+
     if (isPlaying) {
-        stopPlayback(); // Pausiert das Lied
+        stopPlayback(); 
     } else {
-        // Entweder neuen Song laden, oder den pausierten weiterspielen!
         trackData.length === 0 ? selectAndPlayTrack(0, activeSystem) : resumePlayback();
     }
 });
 
 document.getElementById('btn-next').addEventListener('click', () => {
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); // iOS FIX
     selectAndPlayTrack((currentTrackIndex + 1) % trackRegistry[activeSystem].length, activeSystem);
 });
+
 document.getElementById('btn-prev').addEventListener('click', () => {
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); // iOS FIX
     let prevIdx = currentTrackIndex - 1;
     if (prevIdx < 0) prevIdx = trackRegistry[activeSystem].length - 1;
     selectAndPlayTrack(prevIdx, activeSystem);
 });
+
 // --- PURE AUDIO / ECO MODE TOGGLE ---
 document.getElementById('btn-eco').addEventListener('click', () => {
     isEcoMode = true;
