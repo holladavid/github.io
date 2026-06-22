@@ -475,22 +475,23 @@ noSleepVideo.setAttribute('loop', '');
 // Ein absolut winziges, leeres Video, das Safari austrickst
 noSleepVideo.src = 'data:video/mp4;base64,AAAAHGZ0eXBtcDQyAAAAAG1wNDJpc29tYXZjMQAAAz5tb292AAAAbG12aGQAAAAA/8f/3v/H/+QAAALuAAAC7gABAAABAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAGGlvZHMAAAAAE//H/+QAAALuAAAC7gABAAAAAAABAAAAMXRyYWsAAABcdGtoZAAAAAD/x//e/8f/5AAAAAEAAAAAAAAC7gAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAgAAAAIAAAAgZWR0cwAAABBlbHN0AAAAAQAAAu4AAAAAAAEAAAAAAixtZGlhAAAAIG1kaGQAAAAA/8f/3v/H/+QAAALuAAAC7gABAAAAAAAxAAAAAAAvaGRscgAAAAAAAAAAdmlkZQAAAAAAAAAAAAAAAFZpZGVvSGFuZGxlcgAAAAIcbWluZgAAABR2bWhkAAAAAQAAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAAcRzdGJsAAAAp3N0c2QAAAAAAAAAAQAAAJNhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAgACAEgAAABIAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAR//8AAAAxYXZjQwH0AAr/4QAZZ/QACq608AUBzgAAAwAABgAAAwivDxgXoAAAAQAAABhzdHRzAAAAAAAAAAEAAAABAAAC7gAAAABzdHNzAAAAAAAAAAEAAAABAAAAHHN0c2MAAAAAAAAAAQAAAAEAAAABAAAAHHN0c3oAAAAAAAAAAAAAAAEAAAAeAAAAFHN0Y28AAAAAAAAAAQAAADAAAAA0dWR0YQAAACxtZXRhAAAAAAAAAABoZGxyAAAAAAAAAABtZGlyYXBwbAAAAAAAAAAAAAAA';
 
-
+// --- PURE AUDIO / ECO MODE TOGGLE ---
 document.getElementById('btn-eco').addEventListener('click', async () => {
+    // 1. WICHTIG FÜR iOS: Video MUSS synchron in der ersten Millisekunde nach dem Klick starten!
+    noSleepVideo.play().catch(e => console.warn('iOS Video-Hack blockiert:', e));
+
     isEcoMode = true;
     document.getElementById('eco-overlay').classList.remove('hidden');
     
-    // 1. Offizielle Methode (Für Desktop & Android)
+    // 2. Offizielle Methode (Für Desktop, Android & neuere iOS Versionen)
     try {
         if ('wakeLock' in navigator) {
             wakeLock = await navigator.wakeLock.request('screen');
+            console.log('[SYSTEM] Wake Lock aktiv. Bildschirm bleibt an.');
         }
     } catch (err) {
-        console.warn(`Wake Lock API blockiert (HTTP/iOS?). Fallback aktiviert.`);
+        console.warn(`Wake Lock API blockiert. Fallback läuft.`);
     }
-    
-    // 2. iOS Fallback-Hack (Zwingt das iPhone, wach zu bleiben)
-    noSleepVideo.play().catch(e => console.warn('iOS Video-Hack blockiert:', e));
 });
 
 document.getElementById('btn-eco-off').addEventListener('click', async () => {
