@@ -91,11 +91,10 @@ async function initAudioEngine() {
 }
 
 // Der "virtuelle Lötkolben": Tauscht einen Chip auf dem Mainboard aus!
-// Der "virtuelle Lötkolben": Tauscht einen Chip auf dem Mainboard aus!
 async function loadEmuCore(system, coreConfig) {
     try {
-        // Skript in den Browser-Cache laden
-        await audioCtx.audioWorklet.addModule(coreConfig.file);
+        // HIER IST DER FIX: { type: 'module' } erlaubt unsere neuen ES6-Importe!
+        await audioCtx.audioWorklet.addModule(coreConfig.file, { type: 'module' });
         
         // Alten Chip abklemmen, falls vorhanden
         if (system === 'atari' && ymNode) ymNode.disconnect();
