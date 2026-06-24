@@ -15,7 +15,7 @@ export const workletRegistry = {
         { id: 'sid-6581', name: 'MOS SID 6581 (Classic)', cpu: 3, file: 'js/worklets/c64/sid-worklet.js', processor: 'sid-processor' }
     ],
     amiga: [
-        // Paula ist sehr leichtgewichtig (nur RAM-Lookups und einfaches Interpolieren)
-        { id: 'paula-standard', name: 'MOS Paula 8364', cpu: 1, file: 'js/worklets/amiga/paula-worklet.js', processor: 'paula-processor' }
+        // Mit originaler Amiga 500 Filter-Emulation und DAC-Multiplikation heben wir die CPU auf Stufe 2 (■■□□)
+        { id: 'paula-standard', name: 'MOS Paula 8364', cpu: 2, file: 'js/worklets/amiga/paula-worklet.js', processor: 'paula-processor' }
     ]
 };
