@@ -47,6 +47,7 @@ body.theme-atari {
 body, html {
     width: 100%;
     height: 100%;
+    height: 100dvh; /* Verhindert Safari-Überlauf */
     background-color: var(--bg-color);
     color: var(--text-color);
     font-family: var(--font-main);
@@ -86,10 +87,11 @@ body, html {
     display: flex;
     flex-direction: column;
     height: 100vh;
+    height: 100dvh; /* Zieht die gesamte App exakt in das sichtbare Browserfenster */
 }
 
 #visual-zone {
-    height: 40vh;
+    height: 35vh;
     position: relative;
     background-color: #000;
 }
@@ -108,7 +110,7 @@ body, html {
 }
 
 #ui-zone {
-    height: 50vh;
+    height: 47vh;
     display: flex;
     background-color: var(--bg-color);
     padding: 20px;
@@ -636,8 +638,9 @@ body, html {
     
     /* 1. iOS STICKY BUGFIX: Safari killt Sticky, wenn body overflow-hidden hat! */
     body, html {
-        overflow: visible !important; /* Muss visible sein, sonst streikt iOS */
+        overflow: visible !important; 
         height: auto;
+        min-height: 100dvh; /* Mobile Safari Anpassung */
     }
 
     /* Begrenzt die Höhe des aufgeklappten HUDs auf Handys */
@@ -656,8 +659,12 @@ body, html {
         height: 45vh; /* Etwas mehr Platz für das gestapelte HUD */
     }
 
+    /* Das Scroller-Zone Upgrade für den sicheren iOS-Rand */
     #scroller-zone {
-        height: 8vh;
+        height: auto;
+        min-height: 8vh;
+        padding-bottom: env(safe-area-inset-bottom); /* iOS Home-Indikator Safe Area Support */
+        box-sizing: border-box; /* Garantiert korrekte Höhenberechnung */
     }
 
     /* 2. UI-Zonen untereinander stapeln */

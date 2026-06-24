@@ -1066,7 +1066,7 @@ function initScroller() {
     canvas.width = canvas.clientWidth; canvas.height = canvas.clientHeight;
     
     let offset = 0;          
-    const speed = 2.5, frequency = 0.015, amplitude = canvas.height / 3; 
+    const speed = 2.5; 
     const baseGreets = " +++ AT LAST, THE ULTIMATE HTML5 MUSIC DISK IS COMPLETE +++ CODE & DSP MAGIK RUNNING AT A SOLID 50 HZ VBLANK +++ DEEP CHIP EMULATION VIA AUDIOWORKLETS +++ NO MP3, NO BULLSHIT, JUST PURE MATHEMATICS +++ GREETS FLY OUT TO ALL THE PIXEL PUSHERS, CYCLE CRUNCHERS AND WAVEFORM WIZARDS OUT THERE +++ TO EVERYONE WHO STILL KEEPS THE SPIRIT OF THE 8-BIT AND 16-BIT ERA ALIVE +++ TO THE TRUE LOVERS OF DEMOSCENE ART AND CHIPTUNE MAGIC +++ LET THE ANALOG FILTERS BURN +++ WRAP AROUND +++ ";
     
     function draw() {
@@ -1084,6 +1084,9 @@ function initScroller() {
         ctx.font = isAmiga || isAtari ? "32px 'VT323', monospace" : "24px 'Press Start 2P', monospace";
         ctx.textBaseline = "middle";
         
+        // BUGFIX: VT323-Metrik-Kompensation (zieht die tiefhängende Schrift sachte nach oben)
+        let fontMetricOffset = (isAmiga || isAtari) ? -(canvas.height * 0.08) : 0;
+
         let fullText = currentScrollerText + baseGreets;
         const charWidth = ctx.measureText("A").width;
         let startX = canvas.width - offset;
@@ -1091,9 +1094,10 @@ function initScroller() {
         for (let i = 0; i < fullText.length; i++) {
             let x = startX + (i * charWidth);
             if (x > -50 && x < canvas.width + 50) {
-                let wave1 = Math.sin((x * 0.01) + (offset * 0.04)) * (canvas.height / 3);
-                let wave2 = Math.cos((x * 0.02) + (offset * 0.07)) * (canvas.height / 6);
-                ctx.fillText(fullText[i], x, (canvas.height / 2) + wave1 + wave2);
+                // BUGFIX: Amplituden weiter gestaucht (insg. max 22% Auslenkung) für sichere Pufferzonen
+                let wave1 = Math.sin((x * 0.01) + (offset * 0.04)) * (canvas.height * 0.16); // Von 22% auf 16% gedämpft
+                let wave2 = Math.cos((x * 0.02) + (offset * 0.07)) * (canvas.height * 0.06); // Von 8% auf 6% gedämpft
+                ctx.fillText(fullText[i], x, (canvas.height / 2) + wave1 + wave2 + fontMetricOffset);
             }
         }
         offset = (offset + speed) > (charWidth * fullText.length + canvas.width) ? 0 : offset + speed;
