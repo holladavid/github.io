@@ -73,3 +73,44 @@ export class DCBlocker {
         return out;
     }
 }
+
+/**
+ * Erkennt Digidrum-Trigger innerhalb eines YM5/YM6-Register-Frames.
+ * Liefert die 1-basierte Sample-Nummer oder 0, falls kein Trigger vorliegt.
+ * 
+ * @param {Uint8Array} frame - Das aktuelle 16-Byte Register-Frame
+ * @returns {number} 1-basierter Index für die Digidrum (0 = kein Trigger)
+ */
+export function detectDigidrum(frame) {
+    let activeDigiTrigger = 0;
+
+    // YM6 Spezialeffekt 1 (gespeichert in R1)
+    // Bit 6-7: Typ (00: SID, 01: Digidrum, 10: Sinus SID, 11: Sync-Buzzer)
+    // Bit 4-5: Kanal (01: Voice A, 10: Voice B, 11: Voice C)
+    const fx1Type = (frame[1] & 0xC0) >> 6;
+    const fx1Voice = (frame[1] & 0x30) >> 4;
+
+    if (fx1Type === 1 && fx1Voice > 0) {
+        // Das Lautstärkeregister des Kanals (R8, R9 oder R10) enthält die Sample-ID in Bit 0-4
+        const sampleReg = 8 + fx1Voice - 1;
+        activeDigiTrigger = (frame[sampleReg] & 0x1F) + 1;
+    } else {
+        // YM6 Spezialeffekt 2 (gespeichert in R3)
+        // Bit 6-7: Typ, Bit 4-5: Kanal
+        const fx2Type = (frame[3] & 0xC0) >> 6;
+        const fx2Voice = (frame[3] & 0x30) >> 4;
+
+        if (fx2Type === 1 && fx2Voice > 0) {
+            const sampleReg = 8 + fx2Voice - 1;
+            activeDigiTrigger = (frame[sampleReg] & 0x1F) + 1;
+        }
+    }
+
+    // Fallback: Direkte Abfrage der virtuellen Register R14/R15
+    if (activeDigiTrigger === 0) {
+        if (frame[15] > 0) activeDigiTrigger = frame[15];
+        else if (frame[14] > 0) activeDigiTrigger = frame[14];
+    }
+
+    return activeDigiTrigger;
+}

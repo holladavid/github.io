@@ -3,7 +3,7 @@
 // Pure Modular Architecture - Vangelis Synthesizer & Tape Delay
 // =========================================================
 
-import { YM_DAC, polyBLEP, cubicInterpolate, MoogFilter, DCBlocker } from '../lib/dsp-utils.js';
+import { YM_DAC, polyBLEP, cubicInterpolate, MoogFilter, DCBlocker, detectDigidrum } from '../lib/dsp-utils.js';
 import { DynamicStaging } from '../lib/dynamic-staging.js';
 
 class YMBladeRunnerProcessor extends AudioWorkletProcessor {
@@ -113,21 +113,8 @@ class YMBladeRunnerProcessor extends AudioWorkletProcessor {
                         }
                     }
                     
-                    // Digidrum Catcher V3
-                    let activeDigiTrigger = 0;
-                    if (frame[15] > 0) activeDigiTrigger = frame[15];
-                    else if (frame[14] > 0) activeDigiTrigger = frame[14];
-                    else {
-                        let fx1Type = (frame[1] & 0xC0) >> 6;
-                        let fx1Voice = (frame[1] & 0x30) >> 4;
-                        if (fx1Type !== 1 && fx1Voice > 0) activeDigiTrigger = (frame[8 + fx1Voice - 1] & 0x1F) + 1;
-                        
-                        let fx2Type = (frame[3] & 0xC0) >> 6;
-                        let fx2Voice = (frame[3] & 0x30) >> 4;
-                        if (activeDigiTrigger === 0 && fx2Type !== 1 && fx2Voice > 0) {
-                            activeDigiTrigger = (frame[8 + fx2Voice - 1] & 0x1F) + 1;
-                        }
-                    }
+                    // Digidrum Catcher über modularen Helper
+                    let activeDigiTrigger = detectDigidrum(frame);
 
                     if (activeDigiTrigger > 0 && activeDigiTrigger !== this.lastDigiTrigger) {
                         if (this.digidrums[activeDigiTrigger - 1]) {
@@ -265,7 +252,8 @@ class YMBladeRunnerProcessor extends AudioWorkletProcessor {
             if (cycles > 0 && hold) { envVolRaw = (alt ? (attack ? 0.0 : 1.0) : (attack ? 1.0 : 0.0)); } 
             else { let flip = (cycles % 2 === 1) && alt; let up = attack ? !flip : flip; envVolRaw = up ? localPhase : (1.0 - localPhase); }
             
-            let envVolIndex = Math.floor(envVolRaw * 15.99);
+            // Schutz vor Indexüberschreitungen des DAC-Arrays (max index 15)
+            let envVolIndex = Math.min(15, Math.max(0, Math.floor(envVolRaw * 15.99)));
 
             let targetVolA = (this.regs[8] & 0x10) ? YM_DAC[envVolIndex] : YM_DAC[this.regs[8] & 0x0F];
             let targetVolB = (this.regs[9] & 0x10) ? YM_DAC[envVolIndex] : YM_DAC[this.regs[9] & 0x0F];
@@ -307,15 +295,19 @@ class YMBladeRunnerProcessor extends AudioWorkletProcessor {
             let digiSample = 0;
             if (this.currentDigidrum) {
                 let posInt = Math.floor(this.digiPos);
-                let mu = this.digiPos - posInt;
-                let y0 = this.currentDigidrum[posInt - 1] || 0;
-                let y1 = this.currentDigidrum[posInt];
-                let y2 = this.currentDigidrum[posInt + 1] || 0;
-                let y3 = this.currentDigidrum[posInt + 2] || 0;
-                
-                digiSample = cubicInterpolate(y0, y1, y2, y3, mu) * 0.45; 
-                this.digiPos += 8000 / sampleRate; // Epic, gepitchte Drums!
-                if (this.digiPos >= this.currentDigidrum.length - 2) this.currentDigidrum = null; 
+                // Harter Grenzschutz vor unerwünschten Array-Überschreitungen
+                if (posInt >= 0 && posInt < this.currentDigidrum.length - 2) {
+                    let mu = this.digiPos - posInt;
+                    let y0 = posInt > 0 ? this.currentDigidrum[posInt - 1] : 0;
+                    let y1 = this.currentDigidrum[posInt];
+                    let y2 = this.currentDigidrum[posInt + 1];
+                    let y3 = this.currentDigidrum[posInt + 2];
+                    
+                    digiSample = cubicInterpolate(y0, y1, y2, y3, mu) * 0.45; 
+                    this.digiPos += 8000 / sampleRate; // Epic, gepitchte Drums!
+                } else {
+                    this.currentDigidrum = null; 
+                }
             }
 
             // ==========================================
@@ -387,4 +379,5 @@ class YMBladeRunnerProcessor extends AudioWorkletProcessor {
         return true; 
     }
 }
+
 registerProcessor('ym-bladerunner-processor', YMBladeRunnerProcessor);
