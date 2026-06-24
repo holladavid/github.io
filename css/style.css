@@ -257,6 +257,7 @@ body, html {
     display: flex;
     align-items: center;
     gap: 10px;
+    flex: 1; /* Nimmt den restlichen Platz ein */
     margin-top: 0; /* Von 15px auf 0 korrigiert für perfekte vertikale Zentrierung */
     color: var(--panel-text); /* Perfekter Kontrast */
     font-size: calc(var(--font-size-base) * 0.9);
@@ -287,9 +288,10 @@ body, html {
     display: flex;
     align-items: center;
     gap: 10px;
-    margin-top: 15px;
+    margin-top: 0;
     color: var(--panel-text); /* Perfekter Kontrast */
     font-size: calc(var(--font-size-base) * 0.9);
+    line-height: 1; /* Bereinigt theme-abhängige Schriftüberhänge */
 }
 
 .timeline-control input[type="range"], 
@@ -675,7 +677,7 @@ body, html {
         overflow-y: visible !important; 
     }
 
-/* NEU: Sticky Playback-Bar auf dem Handy (iOS Safe!) */
+    /* NEU: Sticky Playback-Bar auf dem Handy (iOS Safe!) */
     #playback-bar {
         position: -webkit-sticky; 
         position: sticky;
@@ -684,14 +686,13 @@ body, html {
         flex-wrap: wrap; 
         padding: 10px;
         box-shadow: 0 5px 15px rgba(0,0,0,0.8); 
+        align-items: center; /* Überschreibt Desktop-Stretch, um kompakte Höhe & Sticky-Funktion zu reaktivieren */
     }
-    
-/* Elemente auf dem Handy untereinander anordnen und Flex-Sperren lösen! */
-    #playback-bar .controls { 
-        flex: 1 1 100%; /* Überschreibt die Desktop-Sperre */
-        width: 100%; 
-        justify-content: center; 
-        margin-bottom: 5px; 
+
+    /* Große, griffige Touch-Tasten speziell für Mobilgeräte */
+    #playback-bar .controls button {
+        padding: 14px 0; /* Erhöhtes vertikales Padding für sichere Fingertaps */
+        font-size: calc(var(--font-size-base) * 1.3); /* Sachte Textvergrößerung für bessere Lesbarkeit */
     }
     #playback-bar .timeline-control { 
         flex: 1 1 100%; 
