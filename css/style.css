@@ -140,27 +140,109 @@ body, html {
     padding: 15px; 
 }
 
-/* System Tabs (Flat Design) */
+/* =========================================
+   SKEUOMORPHIC RETRO SYSTEM TABS
+========================================= */
 .system-tabs {
     display: flex;
     justify-content: space-between;
-    margin-bottom: 15px;
-    gap: 5px; /* Kleiner Abstand zwischen den Tabs */
+    margin-bottom: 20px;
+    gap: 8px; /* Etwas mehr Luft zwischen den Tasten */
 }
+
 .tab-btn {
     flex: 1;
-    background: rgba(0, 0, 0, 0.15); /* Abgedunkelter Block statt Rahmen */
-    color: var(--panel-text);
+    position: relative;
     border: none;
-    padding: 8px 0;
+    padding: 10px 0;
     font-family: inherit;
     font-size: var(--font-size-base);
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all 0.15s cubic-bezier(0.25, 0.8, 0.25, 1);
+    outline: none;
+    text-transform: uppercase;
 }
-.tab-btn.active, .tab-btn:hover {
-    background: var(--panel-text);
-    color: var(--fg-color);
+
+/* Die magischen Tracker ASCII-Klammer-Generatoren */
+.tab-btn::before {
+    content: "[ ";
+    opacity: 0.15;
+    transition: all 0.15s ease;
+}
+.tab-btn::after {
+    content: " ]";
+    opacity: 0.15;
+    transition: all 0.15s ease;
+}
+
+.tab-btn:hover::before, .tab-btn:hover::after,
+.tab-btn.active::before, .tab-btn.active::after {
+    opacity: 1;
+    color: var(--highlight-color);
+}
+
+/* --- THEME 1: COMMODORE 64 ACCENTS --- */
+body.theme-c64 .tab-btn {
+    background: #201a60; /* Dunkles C64-Blau */
+    color: #6c5eb5;
+    border-bottom: 3px solid #141040;
+}
+body.theme-c64 .tab-btn:hover {
+    color: var(--highlight-color);
+    border-bottom-color: #6c5eb5;
+}
+body.theme-c64 .tab-btn.active {
+    background: #352879; /* C64 Panel-Blau */
+    color: var(--highlight-color);
+    border-bottom: 4px solid var(--highlight-color); /* Hellblauer/Weißer Akzent */
+    box-shadow: inset 0 3px 6px rgba(0,0,0,0.6);
+    transform: translateY(1px);
+}
+
+/* --- THEME 2: AMIGA REGENBOGEN ACCENTS --- */
+body.theme-amiga .tab-btn {
+    background: #0a0a0a;
+    color: #555555;
+    border-top: 3px solid #1a1a1a;
+    font-family: 'VT323', monospace;
+    font-size: 18px;
+}
+body.theme-amiga .tab-btn:hover {
+    color: #ff8800;
+    border-top-color: #ff8800;
+}
+body.theme-amiga .tab-btn.active {
+    background: #112244;
+    color: var(--highlight-color);
+    transform: translateY(1px);
+    box-shadow: inset 0 3px 6px rgba(0,0,0,0.8);
+    
+    /* Der weltberühmte Amiga-Boing-Regenbogen als glühende Oberkante! */
+    border-top: 4px solid transparent;
+    border-image: linear-gradient(90deg, #ff0000, #ff8800, #ffff00, #00ff00, #0000ff, #aa00ff) 1;
+}
+
+/* --- THEME 3: ATARI GREEN GLOW ACCENTS --- */
+body.theme-atari .tab-btn {
+    background: #080808;
+    color: #008800;
+    border: 1px solid #111111;
+    font-family: 'VT323', monospace;
+    font-size: 20px;
+}
+body.theme-atari .tab-btn:hover {
+    color: #55ff55;
+    border-color: #00aa00;
+    box-shadow: 0 0 6px rgba(0, 255, 0, 0.2);
+}
+body.theme-atari .tab-btn.active {
+    background: #111111;
+    color: #55ff55;
+    border-color: #55ff55;
+    transform: translateY(1px);
+    
+    /* Radioaktiver Phosphor-Grün-Glow */
+    box-shadow: inset 0 0 8px rgba(85, 255, 85, 0.4), 0 0 10px rgba(85, 255, 85, 0.6);
 }
 /* --- EMU CORE SELECTOR CONTAINER --- */
 .core-control {
