@@ -839,11 +839,12 @@ document.getElementById('core-selector').addEventListener('change', async (e) =>
 let cachedSystem = null; 
 let hudValElements = [];
 
-// NEU: Historien-Speicher für die Frequenz-Liniendiagramme (ca. 4-5 Sekunden Historie)
+// Historien-Speicher für die Frequenz-Liniendiagramme (ca. 4-5 Sekunden Historie)
 const HIST_LEN = 60; 
 let pitchHistA = new Float32Array(HIST_LEN);
 let pitchHistB = new Float32Array(HIST_LEN);
 let pitchHistC = new Float32Array(HIST_LEN);
+let pitchHistD = new Float32Array(HIST_LEN); // NEU FÜR AMIGA KANAL 4 (DMA 3)
 let histIdx = 0;
 
 // Hilfsfunktion: Zeichnet das Liniendiagramm (Sparkline) ins Canvas
@@ -942,11 +943,35 @@ function makeC64ChannelRow(ch, vIdx) {
     `;
 }
 
+// --- NEU: AMIGA KANAL-GENERATOR FÜR DAS PAULA-HUD ---
+function makeAmigaChannelRow(ch, pan) {
+    return `
+        <div class="hud-channel">
+            <h4>[ DMA CH ${ch} • ${pan} ]</h4>
+            <div class="hud-row">
+                <label>Rate</label>
+                <canvas class="hud-sparkline" id="amiga-pitch-${ch}-chart" width="100" height="18"></canvas>
+                <span class="hud-val" id="amiga-pitch-${ch}-val">0 Hz</span>
+            </div>
+            <div class="hud-row">
+                <label>Volume</label>
+                <div class="hud-bar"><div class="hud-bar-fill" id="amiga-vol-${ch}-bar"></div></div>
+                <span class="hud-val" id="amiga-vol-${ch}-val" style="width: 30px;">0</span>
+            </div>
+            <div class="hud-row">
+                <label>Buffer</label>
+                <span class="hud-text-sel" id="amiga-len-${ch}-val" style="flex-grow:1;">0 Bytes</span>
+                <div class="hud-led" id="amiga-dma-${ch}-led"></div><span style="font-size:0.8em; color:var(--text-color);">ACT</span>
+            </div>
+        </div>
+    `;
+}
+
 function updateChipHUD() {
     const matrix = document.getElementById('hud-matrix');
 
     // 1. DOM IMMER sofort neu aufbauen, wenn sich das System ändert!
-    if (cachedSystem !== activeSystem || (activeSystem === 'amiga' && hudValElements.length !== 28)) {
+    if (cachedSystem !== activeSystem) {
         cachedSystem = activeSystem;
         
         if (activeSystem === 'atari') {
@@ -991,7 +1016,6 @@ function updateChipHUD() {
                                 <label>Shape</label>
                                 <span id="env-shape-val" class="hud-text-sel">--</span>
                             </div>
-                            <!-- DIE KORREKTE GLOBAL TRIG LED -->
                             <div class="hud-row">
                                 <label>Global Trig</label>
                                 <span id="digi-g-val" class="hud-text-sel" style="flex-grow: 1;">--</span>
@@ -1002,7 +1026,6 @@ function updateChipHUD() {
                 </div>
             `;
             pitchHistA.fill(0); pitchHistB.fill(0); pitchHistC.fill(0);
-            hudValElements = []; 
 
         } else if (activeSystem === 'c64') {
             // ADVANCED DSP ANALYZER LAYOUT FÜR C64 SID
@@ -1060,26 +1083,44 @@ function updateChipHUD() {
                 </div>
             `;
             pitchHistA.fill(0); pitchHistB.fill(0); pitchHistC.fill(0);
-            hudValElements = []; 
 
-        } else {
-            // FALLBACK HEX-MATRIX FÜR AMIGA
-            let html = '';
-            const amigaLabels = [
-                'A0LCH', 'A0LCL', 'A0LENH', 'A0LENL', 'A0PERH', 'A0PERL', 'A0VOL',
-                'A1LCH', 'A1LCL', 'A1LENH', 'A1LENL', 'A1PERH', 'A1PERL', 'A1VOL',
-                'A2LCH', 'A2LCL', 'A2LENH', 'A2LENL', 'A2PERH', 'A2PERL', 'A2VOL',
-                'A3LCH', 'A3LCL', 'A3LENH', 'A3LENL', 'A3PERH', 'A3PERL', 'A3VOL'
-            ];
-            for (let i = 0; i < 28; i++) {
-                html += `<div class="hud-cell"><div class="hud-cell-label">${amigaLabels[i]}</div><div class="hud-cell-val" id="hud-val-${i}">--</div></div>`;
-            }
-            matrix.innerHTML = html;
-            
-            hudValElements = [];
-            for (let i = 0; i < 28; i++) {
-                hudValElements.push(document.getElementById(`hud-val-${i}`));
-            }
+        } else if (activeSystem === 'amiga') {
+            // ADVANCED DSP ANALYZER LAYOUT FÜR AMIGA PAULA
+            matrix.innerHTML = `
+                <div class="atari-analyzer-grid">
+                    <div>
+                        ${makeAmigaChannelRow(0, 'L')}
+                        ${makeAmigaChannelRow(1, 'R')}
+                        ${makeAmigaChannelRow(2, 'R')}
+                    </div>
+                    <div>
+                        ${makeAmigaChannelRow(3, 'L')}
+                        <div class="hud-channel" style="margin-top: 15px;">
+                            <h4>[ PAULA 8364 & FILTERS ]</h4>
+                            <div class="hud-row">
+                                <label>Clock</label>
+                                <span class="hud-text-sel" style="flex-grow: 1;">3.546895 MHz (PAL)</span>
+                            </div>
+                            <div class="hud-row">
+                                <label>LED Filter</label>
+                                <span class="hud-text-sel" style="flex-grow: 1;">12dB Butterworth</span>
+                                <div class="hud-led on" style="background:#ff0000; box-shadow:0 0 8px #ff0000; border-color:#ff8800;"></div>
+                                <span style="font-size:0.8em; margin-left:8px; color:var(--text-color);">PWR</span>
+                            </div>
+                            <div class="hud-row">
+                                <label>RC Filter</label>
+                                <span class="hud-text-sel" style="flex-grow: 1;">6dB Static (4.42kHz)</span>
+                            </div>
+                            <div class="hud-row" style="margin-top: 15px;">
+                                <label>Digi Hack</label>
+                                <span id="digi-g-val" class="hud-text-sel" style="flex-grow: 1;">--</span>
+                                <div id="hud-digi-led" style="width: 10px; height: 10px; border-radius: 50%; background: #440000; border: 1px solid #ff0000; box-shadow: none;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            pitchHistA.fill(0); pitchHistB.fill(0); pitchHistC.fill(0); pitchHistD.fill(0);
         }
     }
     
@@ -1164,13 +1205,11 @@ function updateChipHUD() {
         document.getElementById('env-shape-val').innerText = shapeStr;
 
     } else if (activeSystem === 'c64') {
-        // --- C64 SID HARDWARE REGISTER UPDATER ---
         const r = currentChipRegs;
         
         for (let v = 0; v < 3; v++) {
             let base = v * 7;
             
-            // Frequenz
             let freq = r[base] | (r[base+1] << 8);
             let hz = freq ? (freq * 985248) / 16777216 : 0;
             if (hz > 15000) hz = 0; 
@@ -1181,12 +1220,10 @@ function updateChipHUD() {
             document.getElementById(`c64-pitch-${v+1}-val`).innerText = hz >= 1000 ? (hz/1000).toFixed(1)+' kHz' : Math.round(hz) + ' Hz';
             drawSparkline(`c64-pitch-${v+1}-chart`, histArr, (histIdx+1)%HIST_LEN, '#6c5eb5');
 
-            // Pulse Width
             let pw = r[base+2] | ((r[base+3] & 0x0F) << 8);
             document.getElementById(`c64-pw-${v+1}-bar`).style.width = (pw / 4095 * 100) + '%';
             document.getElementById(`c64-pw-${v+1}-val`).innerText = Math.round((pw / 4095) * 100) + '%';
 
-            // Control LEDs
             let ctrl = r[base+4];
             document.getElementById(`c64-tri-${v+1}-led`).className = (ctrl & 16) ? 'hud-led on' : 'hud-led';
             document.getElementById(`c64-saw-${v+1}-led`).className = (ctrl & 32) ? 'hud-led on' : 'hud-led';
@@ -1194,7 +1231,6 @@ function updateChipHUD() {
             document.getElementById(`c64-noi-${v+1}-led`).className = (ctrl & 128) ? 'hud-led on' : 'hud-led';
             document.getElementById(`c64-gate-${v+1}-led`).className = (ctrl & 1) ? 'hud-led on' : 'hud-led';
 
-            // ADSR Text
             let ad = r[base+5];
             let sr = r[base+6];
             document.getElementById(`c64-adsr-${v+1}-val`).innerText = `A:${ad>>4} D:${ad&15} S:${sr>>4} R:${sr&15}`;
@@ -1202,7 +1238,6 @@ function updateChipHUD() {
         
         histIdx = (histIdx + 1) % HIST_LEN;
 
-        // Filter / Routing
         let fcut = (r[21] & 7) | (r[22] << 3);
         let fhz = 30 + (fcut * 8);
         document.getElementById('c64-cut-bar').style.width = (fcut / 2047 * 100) + '%';
@@ -1227,13 +1262,38 @@ function updateChipHUD() {
         document.getElementById('c64-vol-bar').style.width = (vol / 15 * 100) + '%';
         document.getElementById('c64-vol-val').innerText = vol;
 
-    } else {
-        // AMIGA FALLBACK UPDATE
-        for (let i = 0; i < currentChipRegs.length; i++) {
-            if (!hudValElements[i]) continue;
-            let hexVal = currentChipRegs[i].toString(16).toUpperCase().padStart(2, '0');
-            if (hudValElements[i].innerText !== hexVal) hudValElements[i].innerText = hexVal;
+    } else if (activeSystem === 'amiga') {
+        // --- AMIGA PAULA HARDWARE REGISTER UPDATER ---
+        const r = currentChipRegs;
+        const hists = [pitchHistA, pitchHistB, pitchHistC, pitchHistD];
+        
+        for (let c = 0; c < 4; c++) {
+            let base = c * 7;
+            
+            let address = (r[base] << 8) | r[base+1];
+            let lenWords = (r[base+2] << 8) | r[base+3];
+            let period = (r[base+4] << 8) | r[base+5];
+            let vol = r[base+6];
+            
+            // Reale Paula PCM Abtastrate berechnen (Amiga Clock / Period)
+            let hz = period > 0 ? 3546895 / period : 0;
+            if (hz > 60000) hz = 0; // Filtert absurde Frequenzen (0 Perioden) heraus
+            
+            hists[c][histIdx] = hz;
+            document.getElementById(`amiga-pitch-${c}-val`).innerText = hz >= 1000 ? (hz/1000).toFixed(1)+' kHz' : Math.round(hz) + ' Hz';
+            drawSparkline(`amiga-pitch-${c}-chart`, hists[c], (histIdx+1)%HIST_LEN, '#ff8800'); 
+            
+            document.getElementById(`amiga-vol-${c}-bar`).style.width = (vol / 64 * 100) + '%';
+            document.getElementById(`amiga-vol-${c}-val`).innerText = vol;
+            
+            document.getElementById(`amiga-len-${c}-val`).innerText = (lenWords * 2) + ' B';
+            
+            // LED leuchtet, wenn DMA-Block Daten abspielt (Vol > 0 und gültiger Pointer)
+            let isAct = address > 0 && vol > 0 && lenWords > 0;
+            document.getElementById(`amiga-dma-${c}-led`).className = isAct ? 'hud-led on' : 'hud-led';
         }
+        
+        histIdx = (histIdx + 1) % HIST_LEN;
     }
 }
 
