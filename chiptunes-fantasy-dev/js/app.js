@@ -732,11 +732,11 @@ document.getElementById('volume-slider').addEventListener('input', (e) => {
 function toggleFullscreen() {
     const visualZone = document.getElementById('visual-zone');
     
-    // BUGFIX: Kugel- und Safari-sichere iOS-Erkennung (iPhone, iPad, iPod incl. iPadOS 13+ Safari)
+    // Kugel- und Safari-sichere iOS-Erkennung (iPhone, iPad, iPod incl. iPadOS 13+ Safari)
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
-                  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+                  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ||
+                  (/Macintosh/.test(navigator.userAgent) && "ontouchend" in document);
     
-    // Native API-Prüfung (Wird für iOS-Geräte nun erzwungen umgangen, da Apple die Ausführung blockiert)
     const hasNativeSupport = !isIOS && !!(visualZone.requestFullscreen || visualZone.webkitRequestFullscreen);
     
     if (hasNativeSupport) {
@@ -764,8 +764,11 @@ function toggleFullscreen() {
             btn.innerText = '[ ⛶ ]';
         }
         
-        // Triggere manuell ein Resize-Event, damit das Canvas sich sofort anpasst
-        window.dispatchEvent(new Event('resize'));
+        // BUGFIX: Gib dem iOS Safari DOM 50 Millisekunden Zeit, die Fixed-Positioning-Regeln
+        // anzuwenden, bevor wir das Canvas zwingen, sich neu zu berechnen!
+        setTimeout(() => {
+            window.dispatchEvent(new Event('resize'));
+        }, 50);
     }
 }
 
@@ -1120,15 +1123,33 @@ function initVisuals() {
     let oscHistory = new Float32Array(historyLength).fill(NaN);
     let oscIndex = 0;
 
-    // BUGFIX: Passt das Canvas und den Oszilloskop-Puffer bei Größenänderungen an!
+    // BUGFIX: Bewahrt die Oszilloskop-Welle beim Resize (Kein "Löschen" mehr!)
     function resizeCanvas() {
-        canvas.width = canvas.clientWidth; 
-        canvas.height = canvas.clientHeight;
+        const newWidth = canvas.clientWidth;
+        const newHeight = canvas.clientHeight;
         
-        // Puffer an die neue physikalische Breite angleichen
-        historyLength = canvas.width;
-        oscHistory = new Float32Array(historyLength).fill(NaN);
-        oscIndex = 0; // Zeiger resetten
+        if (canvas.width !== newWidth) {
+            let oldHistory = oscHistory;
+            let oldLen = oldHistory ? oldHistory.length : 0;
+            
+            canvas.width = newWidth; 
+            canvas.height = newHeight;
+            historyLength = canvas.width;
+            
+            oscHistory = new Float32Array(historyLength).fill(NaN);
+            
+            // Alte Welle nahtlos in den neuen Puffer retten!
+            if (oldLen > 0) {
+                let copyLen = Math.min(oldLen, historyLength);
+                for (let i = 0; i < copyLen; i++) {
+                    let oldVal = oldHistory[(oscIndex - copyLen + i + oldLen) % oldLen];
+                    oscHistory[i] = oldVal;
+                }
+                oscIndex = copyLen % historyLength;
+            }
+        } else {
+            canvas.height = newHeight; // Nur Höhe hat sich geändert
+        }
     }
     
     // Initiales Setup und Resize-Event-Kopplung

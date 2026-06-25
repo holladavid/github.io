@@ -756,11 +756,19 @@ body.theme-atari .tab-btn.active {
 /* Pseudo-Fullscreen Fallback für iOS / iPhone */
 #visual-zone.pseudo-fullscreen {
     position: fixed !important;
-    top: 0 !important;
-    left: 0 !important;
-    width: 100vw !important;
-    height: 100dvh !important;
-    z-index: 9999 !important; /* Liegt über allen anderen UI-Elementen */
+    inset: 0 !important; /* Setzt Top, Right, Bottom, Left auf 0 */
+    width: 100% !important;
+    height: 100% !important;
+    max-width: none !important;
+    max-height: none !important;
+    z-index: 999999 !important; /* Zwingt sich über Safari-UI-Artefakte */
+    margin: 0 !important;
+    border-radius: 0 !important;
+}
+/* Sichert, dass der Button auch im iOS-Vollbild anklickbar bleibt (Safari Addressbar Puffer) */
+#visual-zone.pseudo-fullscreen #btn-fullscreen {
+    bottom: calc(20px + env(safe-area-inset-bottom)) !important;
+    right: calc(20px + env(safe-area-inset-right)) !important;
 }
 /* =========================================
    SUBSONG DISPLAY TIMELINE OVERLAY
