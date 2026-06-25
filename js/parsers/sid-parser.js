@@ -1,31 +1,7 @@
 // ==========================================
 // C64 SID (PSID/RSID) BINARY FILE PARSER
-// With Integrated HVSC Songlength Database (SLDB)
+// With On-The-Fly HVSC Songlength Database (SLDB)
 // ==========================================
-
-// ECHTE HVSC SONGLENGTH DATABASE (SLDB) FÜR HISTORISCHE PRÄZISION
-const SID_SLDB = {
-    // Commando (Rob Hubbard)
-    "commando": {
-        lengths: [188, 10, 10] // Subsong 1: 3:08 min (188 Sek)
-    },
-    // Monty on the Run (Rob Hubbard)
-    "montyontherun": {
-        lengths: [351, 146, 10] // Subsong 1: 5:51 min (351 Sek)
-    },
-    // Delta (Rob Hubbard)
-    "delta": {
-        lengths: [306, 10, 10] // Subsong 1: 5:06 min (306 Sek)
-    },
-    // Wizball (Martin Galway)
-    "wizball": {
-        lengths: [625, 163, 10] // Subsong 1: 10:25 min (625 Sek)
-    },
-    // The Great Giana Sisters (Chris Hülsbeck) - NEU!
-    "greatgianasisters": {
-        lengths: [215, 146, 111, 131, 161, 13, 93, 47] // Subtune 1 (Intro): 3:35 min (215s) | Subtune 2 (Menu): 2:26 min (146s) | Subtune 4 (In-Game): 1:51 min (111s)
-    }
-};
 
 export async function loadSidFile(url) {
     const response = await fetch(url);
@@ -92,15 +68,25 @@ export async function loadSidFile(url) {
         fileSize: data.length
     };
 
-    // --- 4. HVSC SLDB ABFRAGE (Songlengths.txt Nachbildung) ---
-    // Filtern des Dateinamens aus der URL zur Ermittlung des DB-Schlüssels
-    let filename = url.split('/').pop().toLowerCase().replace(".sid", "").replace(/[\s_-]/g, "");
-    let sldbEntry = SID_SLDB[filename];
+    // --- 4. ON-THE-FLY HVSC SLDB ABFRAGE (Echte AJAX-Datenbank-Kopplung) ---
     let songLengthSeconds = 180; // Fallback: Standardmäßig 3:00 min bei unbekannten Custom-SIDs
+    let allLengths = [180];
     
-    if (sldbEntry && sldbEntry.lengths) {
-        let subsongIdx = (startSong > 0 ? startSong - 1 : 0);
-        songLengthSeconds = sldbEntry.lengths[subsongIdx] || sldbEntry.lengths[0] || 180;
+    try {
+        // Songlengths.json dynamisch aus dem Web-Verzeichnis laden!
+        const sldbResponse = await fetch('tracks/c64/songlengths.json');
+        if (sldbResponse.ok) {
+            const sldb = await sldbResponse.json();
+            let filename = url.split('/').pop().toLowerCase().replace(".sid", "").replace(/[\s_-]/g, "");
+            
+            if (sldb[filename]) {
+                allLengths = sldb[filename].lengths || [180];
+                let subsongIdx = (startSong > 0 ? startSong - 1 : 0);
+                songLengthSeconds = allLengths[subsongIdx] || allLengths[0] || 180;
+            }
+        }
+    } catch (e) {
+        console.warn("[SID PARSER] Konnte songlengths.json nicht laden, verwende Standard-Fallbacks.", e);
     }
     
     // Umrechnen der Sekundendauer in 50Hz-VBLANK-Frames
@@ -114,7 +100,8 @@ export async function loadSidFile(url) {
         playAddress: playAddress,
         startSong: startSong,
         speed: speed,
-        length: totalFrames, // ECHTE und unbestechliche Songlänge!
+        lengths: allLengths, // Echte asynchron abgefragte Längenliste übergeben!
+        length: totalFrames, 
         metadata: metadata
     };
 }

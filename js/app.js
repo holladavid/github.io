@@ -358,6 +358,13 @@ function setTheme(themeName) {
     document.getElementById('time-current').innerText = "00:00";
     document.getElementById('time-total').innerText = "00:00";
     
+    // BUGFIX: Subsong-Anzeige beim Systemwechsel absolut ausblenden!
+    const subsongDisplay = document.getElementById('subsong-display');
+    if (subsongDisplay) {
+        subsongDisplay.classList.add('hidden');
+        subsongDisplay.innerText = "";
+    }
+    
     renderCoreSelector(activeSystem);
 }
 
@@ -436,33 +443,49 @@ async function selectAndPlayTrack(index, system) {
         try {
             let parsedFile = await selectedSong.loadAsync();
             
-            // WEICHENSTELLUNG: SID-Dateien liefern das Emulator-Objekt, andere Dateien ein Frame-Table
             if (isC64System) {
                 // Das komplette, binäre CPU-Paket an die Playback-Engine übergeben!
                 trackData = parsedFile; 
                 currentSubsongIndex = parsedFile.startSong || 1; // Standard-Startsong deklarieren
-            } else {                trackData = parsedFile.frames; 
-                trackData.digidrums = parsedFile.digidrums || [];
-            }
-            
-            if (isAmigaSystem) {
-                trackData.isAmigaFile = true; // Flag für die Playback-Engine
                 
-                // --- DYNAMISCHER SAMPLE-UPLOAD IN DEN PAULA ARBEITSSPEICHER ---
-                if (parsedFile.samples && paulaNode) {
-                    for (let sampleName in parsedFile.samples) {
-                        paulaNode.port.postMessage({
-                            type: 'UPLOAD_SAMPLE',
-                            name: sampleName,
-                            data: parsedFile.samples[sampleName]
-                        });
-                    }
-                    console.log(`[PAULA RAM] ${Object.keys(parsedFile.samples).length} Original-Samples erfolgreich geladen.`);
+                // Absicherung falls lengths undefiniert ist
+                let sldbLengths = trackData.lengths || [180];
+                let songLengthSeconds = sldbLengths[currentSubsongIndex - 1] || sldbLengths[0] || 180;
+                trackData.length = songLengthSeconds * 50; // Frame-Anzahl synchronisieren
+                
+                // Subsong-Anzeige im UI befüllen und einblenden!
+                const subsongDisplay = document.getElementById('subsong-display');
+                if (subsongDisplay) {
+                    subsongDisplay.innerText = `[SUB ${currentSubsongIndex}/${parsedFile.metadata.songs}]`;
+                    subsongDisplay.classList.remove('hidden');
                 }
-            } else if (isC64System) {
-                // Keine Sample-Uploads für SID nötig (alles Synthese im 6502-Core)
             } else {
-                trackData.isYmFile = true;
+                // BUGFIX: Subsong-Anzeige für Amiga-MODs und Atari-YM-Dateien im Binär-Pfad ausblenden!
+                const subsongDisplay = document.getElementById('subsong-display');
+                if (subsongDisplay) {
+                    subsongDisplay.classList.add('hidden');
+                    subsongDisplay.innerText = "";
+                }
+
+                trackData = parsedFile.frames; 
+                trackData.digidrums = parsedFile.digidrums || [];
+                
+                if (isAmigaSystem) {
+                    trackData.isAmigaFile = true;
+                    
+                    // --- DYNAMISCHER SAMPLE-UPLOAD ---
+                    if (parsedFile.samples && paulaNode) {
+                        for (let sampleName in parsedFile.samples) {
+                            paulaNode.port.postMessage({
+                                type: 'UPLOAD_SAMPLE',
+                                name: sampleName,
+                                data: parsedFile.samples[sampleName]
+                            });
+                        }
+                    }
+                } else {
+                    trackData.isYmFile = true;
+                }
             }
 
             let meta = parsedFile.metadata;
@@ -564,8 +587,9 @@ function changeC64Subsong(subsongId) {
     sidNode.port.postMessage({ type: 'CHANGE_SUBSONG', frame: subsongId });
     currentSubsongIndex = subsongId;
 
-    // Zeitanzeige dynamisch auf die exakte HVSC-Länge des neuen Subsongs umstellen!
-    let songLengthSeconds = trackData.lengths[subsongId - 1] || trackData.lengths[0] || 180;
+    // BUGFIX: Absicherung falls lengths undefiniert ist
+    let sldbLengths = trackData.lengths || [180];
+    let songLengthSeconds = sldbLengths[subsongId - 1] || sldbLengths[0] || 180;
     trackData.length = songLengthSeconds * 50; // Frameanzahl aktualisieren
 
     // Slider-Timeline hart zurücksetzen
@@ -574,6 +598,12 @@ function changeC64Subsong(subsongId) {
     document.getElementById('time-current').innerText = "00:00";
     document.getElementById('time-total').innerText = formatTime(trackData.length);
     document.getElementById('progress-slider').value = 0;
+
+    // Subsong-Anzeige aktualisieren
+    const subsongDisplay = document.getElementById('subsong-display');
+    if (subsongDisplay) {
+        subsongDisplay.innerText = `[SUB ${subsongId}/${trackData.metadata.songs}]`;
+    }
 
     // Scroller-Text aktualisieren
     let meta = trackData.metadata;

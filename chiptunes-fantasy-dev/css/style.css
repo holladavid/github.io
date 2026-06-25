@@ -763,6 +763,17 @@ body.theme-atari .tab-btn.active {
     z-index: 9999 !important; /* Liegt über allen anderen UI-Elementen */
 }
 /* =========================================
+   SUBSONG DISPLAY TIMELINE OVERLAY
+========================================= */
+#subsong-display {
+    font-family: inherit;
+    font-size: calc(var(--font-size-base) * 0.9);
+    color: var(--highlight-color);
+    margin-right: 15px; /* Schafft Platz zur Zeitanzeige */
+    text-shadow: 0 0 4px var(--text-color);
+    letter-spacing: 1px;
+}
+/* =========================================
    8. MOBILE RESPONSIVE DESIGN (Smartphones)
    ========================================= */
 @media (max-width: 800px) {
