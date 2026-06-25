@@ -252,15 +252,23 @@ function startPlayback() {
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(e=>console.log(e));
 
     isPlaying = true;
-    let isAmiga = trackData[0] && trackData[0].isAmiga;
-    let isC64 = trackData[0] && trackData[0].isC64;
+    
+    // BUGFIX: Sichere Objektabfragen für Amiga und C64 (unterstützt Arrays und strukturierte Binärobjekte)
+    let isAmiga = (trackData[0] && trackData[0].isAmiga) || trackData.isAmigaFile;
+    let isC64 = (trackData[0] && trackData[0].isC64) || trackData.isSidFile;
     
     if (isAmiga) {
-        // SICHERHEIT: Prüfen ob der Node existiert, bevor wir postMessage aufrufen!
         if (paulaNode) paulaNode.port.postMessage({ type: 'PLAY_TRACK', track: trackData });
         else console.error("[CRITICAL] paulaNode ist undefined. Das Worklet konnte nicht geladen werden.");
     } else if (isC64) {
-        if (sidNode) sidNode.port.postMessage({ type: 'PLAY_TRACK', track: trackData });
+        if (sidNode) {
+            if (trackData.isSidFile) {
+                sidNode.port.postMessage(trackData); // Sendet das gesamte C64-Maschinencode-Paket!
+            } else {
+                // Abwärtskompatibilität für prozedurale Generatoren
+                sidNode.port.postMessage({ type: 'PLAY_TRACK', track: trackData });
+            }
+        }
     } else {
         if (ymNode) {
             ymNode.port.postMessage({ 
@@ -416,17 +424,24 @@ async function selectAndPlayTrack(index, system) {
     renderTracklist(system); 
 
     if (selectedSong.loadAsync) {
-        // BUGFIX: Echte Systemprüfung statt fehlerhafter String-Suche im Titel!
+        // Echte Systemprüfungen statt fehlerhafter String-Suchen im Titel
         const isAmigaSystem = (system === 'amiga');
+        const isC64System = (system === 'c64'); // NEU
         
         currentScrollerText = isAmigaSystem 
             ? "+++ DOWNLOADING AND PARSING BINARY AMIGA MODULE... +++"
-            : "+++ DOWNLOADING AND PARSING BINARY YM FILE... +++";
+            : (isC64System ? "+++ DOWNLOADING AND PARSING BINARY C64 PSID FILE... +++" : "+++ DOWNLOADING AND PARSING BINARY YM FILE... +++");
         
         try {
             let parsedFile = await selectedSong.loadAsync();
-            trackData = parsedFile.frames; 
-            trackData.digidrums = parsedFile.digidrums || [];
+            
+            // WEICHENSTELLUNG: SID-Dateien liefern das Emulator-Objekt, andere Dateien ein Frame-Table
+            if (isC64System) {
+                trackData = parsedFile; // Das gesamte 6502-Code-Paket übergeben!
+            } else {
+                trackData = parsedFile.frames; 
+                trackData.digidrums = parsedFile.digidrums || [];
+            }
             
             if (isAmigaSystem) {
                 trackData.isAmigaFile = true; // Flag für die Playback-Engine
@@ -442,6 +457,8 @@ async function selectAndPlayTrack(index, system) {
                     }
                     console.log(`[PAULA RAM] ${Object.keys(parsedFile.samples).length} Original-Samples erfolgreich geladen.`);
                 }
+            } else if (isC64System) {
+                // Keine Sample-Uploads für SID nötig (alles Synthese im 6502-Core)
             } else {
                 trackData.isYmFile = true;
             }
@@ -450,7 +467,9 @@ async function selectAndPlayTrack(index, system) {
             
             currentScrollerText = isAmigaSystem
                 ? `+++ BOOM! SUCCESSFULLY DECODED AMIGA MODULE +++ NOW PLAYING: ${meta.name.toUpperCase()} BY ${meta.author.toUpperCase()} +++ FORMAT: ${meta.type} +++ THIS IS PURE PROTRACKER MAGIC +++ `
-                : `+++ BOOM! SUCCESSFULLY CRACKED OPEN BINARY FILE +++ NOW PLAYING: ${meta.name.toUpperCase()} BY ${meta.author.toUpperCase()} +++ COMMENT ALONG THE RIDE: ${meta.comment.toUpperCase() || "NO COMMENT"} +++ CRANK UP THE GAIN AND LET THE YM2149 MELT YOUR SPEAKERS +++ `;
+                : (isC64System
+                    ? `+++ BOOM! SUCCESSFULLY CRACKED OPEN BINARY PSID FILE +++ NOW PLAYING: ${meta.name.toUpperCase()} BY ${meta.author.toUpperCase()} +++ FORMAT: ${meta.type} +++ CRANK UP THE VOLUME AND LET THE ANALOG SID FILTERS SHINE +++ `
+                    : `+++ BOOM! SUCCESSFULLY CRACKED OPEN BINARY FILE +++ NOW PLAYING: ${meta.name.toUpperCase()} BY ${meta.author.toUpperCase()} +++ COMMENT ALONG THE RIDE: ${meta.comment.toUpperCase() || "NO COMMENT"} +++ CRANK UP THE GAIN AND LET THE YM2149 MELT YOUR SPEAKERS +++ `);
 
             let techInfo = "";
             if (isAmigaSystem) {
@@ -458,6 +477,13 @@ async function selectAndPlayTrack(index, system) {
                 techInfo += `<p><strong>Size in Memory:</strong> ${meta.fileSize.toLocaleString('de-DE')} Bytes</p>`;
                 techInfo += `<p><strong>Structure:</strong> ${meta.patternCount} Patterns, ${meta.instrumentCount} Synthesized Amiga Instruments</p>`;
                 techInfo += `<p><strong>Paula Configuration:</strong> 4 Channels, Direct DMA emulation</p>`;
+            } else if (isC64System) {
+                // TECHNISCHE AUSWERTUNG FÜR BINÄRE C64-DATEIEN
+                techInfo += `<p><strong>File Signature:</strong> ${meta.type}</p>`;
+                techInfo += `<p><strong>Size in Memory:</strong> ${meta.fileSize.toLocaleString('de-DE')} Bytes</p>`;
+                techInfo += `<p><strong>SID Address Space:</strong> Load: ${meta.loadAddress} | Init: ${meta.initAddress} | Play: ${meta.playAddress}</p>`;
+                techInfo += `<p><strong>Song Data:</strong> ${meta.songs} Subsong(s) detected, starting with Song ${meta.startSong}</p>`;
+                techInfo += `<p><strong>SID Core:</strong> 6502 Emulator, MOS SID 6581, 3 Voices, Analog SVF filtering</p>`;
             } else {
                 techInfo = `<p><strong>File Signature:</strong> ${meta.type} (De-interleaved)</p>`;
                 techInfo += `<p><strong>Length:</strong> ${trackData.length} Frames @ 50Hz VBLANK</p>`;
@@ -527,7 +553,6 @@ async function selectAndPlayTrack(index, system) {
         startPlayback();
     }
 }
-
 // --- BUTTON EVENTS ---
 document.getElementById('btn-play').addEventListener('click', () => {
     // NEU: iOS SAFARI FIX!
