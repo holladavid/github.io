@@ -1,7 +1,8 @@
 // ==========================================
 // C64 SID (PSID/RSID) BINARY FILE PARSER
-// With On-The-Fly HVSC Songlength Database (SLDB)
 // ==========================================
+
+import { SID_SLDB } from '../content/songlengths.js'; // NEU: Statischer Import der unbestechlichen JS-Datenbank!
 
 export async function loadSidFile(url) {
     const response = await fetch(url);
@@ -68,25 +69,18 @@ export async function loadSidFile(url) {
         fileSize: data.length
     };
 
-    // --- 4. ON-THE-FLY HVSC SLDB ABFRAGE (Echte AJAX-Datenbank-Kopplung) ---
-    let songLengthSeconds = 180; // Fallback: Standardmäßig 3:00 min bei unbekannten Custom-SIDs
+    // --- 4. DYNAMISCHE SLDB-ABFRAGE (Echtzeit!) ---
+    let songLengthSeconds = 180; // Fallback
     let allLengths = [180];
     
-    try {
-        // Songlengths.json dynamisch aus dem Web-Verzeichnis laden!
-        const sldbResponse = await fetch('tracks/c64/songlengths.json');
-        if (sldbResponse.ok) {
-            const sldb = await sldbResponse.json();
-            let filename = url.split('/').pop().toLowerCase().replace(".sid", "").replace(/[\s_-]/g, "");
-            
-            if (sldb[filename]) {
-                allLengths = sldb[filename].lengths || [180];
-                let subsongIdx = (startSong > 0 ? startSong - 1 : 0);
-                songLengthSeconds = allLengths[subsongIdx] || allLengths[0] || 180;
-            }
-        }
-    } catch (e) {
-        console.warn("[SID PARSER] Konnte songlengths.json nicht laden, verwende Standard-Fallbacks.", e);
+    // BUGFIX: Wir lesen die Daten nun lokal und ohne fehleranfälliges JSON-Fetching aus dem Modul!
+    let filename = url.split('/').pop().toLowerCase().replace(".sid", "").replace(/[\s_-]/g, "");
+    let sldbEntry = SID_SLDB[filename];
+    
+    if (sldbEntry && sldbEntry.lengths) {
+        allLengths = sldbEntry.lengths;
+        let subsongIdx = (startSong > 0 ? startSong - 1 : 0);
+        songLengthSeconds = allLengths[subsongIdx] || allLengths[0] || 180;
     }
     
     // Umrechnen der Sekundendauer in 50Hz-VBLANK-Frames
@@ -100,7 +94,7 @@ export async function loadSidFile(url) {
         playAddress: playAddress,
         startSong: startSong,
         speed: speed,
-        lengths: allLengths, // Echte asynchron abgefragte Längenliste übergeben!
+        lengths: allLengths, // Längenliste übergeben
         length: totalFrames, 
         metadata: metadata
     };

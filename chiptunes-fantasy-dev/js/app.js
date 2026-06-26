@@ -1,7 +1,14 @@
-// --- IMPORT DER MODULE ---
+// =========================================================================
+//                  CHIPTUNES FANTASY - MAIN APP CONTROLLER
+// =========================================================================
+// Orchestriert das Zusammenspiel zwischen UI, Audio-Modul und Grafik-Engines
+// =========================================================================
+
+// ==========================================
+// 1. IMPORT DER MODULE
+// ==========================================
 import { trackRegistry } from '../tracks/registry.js';
-import { createKickSample, createBassSample, createChordSample, createSnareSample, createLeadSample } from './utils/amiga-helper.js'; 
-import { systemDescriptions, chipCheatSheets } from './content/museum.js'; // <- DIESER IMPORT MUSS INTACT SEIN!
+import { systemDescriptions, chipCheatSheets } from './content/museum.js'; 
 import { workletRegistry } from './worklets/registry.js';
 import { initScroller } from './visuals/scroller.js'; 
 import { initVisuals } from './visuals/visualizer.js'; 
@@ -18,7 +25,9 @@ import {
     getSidNode 
 } from './audio/audio-controller.js'; // Binäre Audio-Schnittstelle importiert
 
-// --- GLOBALE APPLIKATIONS-VARIABLEN ---
+// ==========================================
+// 2. GLOBALE APPLIKATIONS-VARIABLEN
+// ==========================================
 let currentOscValue = 0; 
 let currentChipRegs = null; 
 let activeSystem = 'atari';
@@ -34,7 +43,9 @@ let isEcoMode = false;      // Status für den Pure Audio Mode
 let isUserDragging = false; // Verhindert Slider-Zucken während des Ziehens
 let currentSubsongIndex = 1; // Speichert das aktive C64-Subsong-Verzeichnis (1-basiert)
 
-// --- BOOT SEQUENZ (Modul-sicher) ---
+// ==========================================
+// 3. BOOT- & INITIALISIERUNGS-SEQUENZ
+// ==========================================
 function initApp() {
     // Service-Worker für iOS-Homescreen-Standalone-Modus registrieren
     if ('serviceWorker' in navigator) {
@@ -51,7 +62,7 @@ function initApp() {
         });
     });
 
-const bootScreen = document.getElementById("boot-screen");
+    const bootScreen = document.getElementById("boot-screen");
     bootScreen.addEventListener("click", async () => {
         const demoContainer = document.getElementById("demo-container");
         if (!demoContainer) {
@@ -62,10 +73,10 @@ const bootScreen = document.getElementById("boot-screen");
         bootScreen.classList.add("hidden");
         demoContainer.classList.remove("hidden");
         
-        // 1. Zentrale Web Audio-Engine starten
+        // 1. Audio-Engine starten (Einmaliger Aufruf!)
         await initAudioEngine();
         
-        // 2. BUGFIX: Die 3 Standard-Prozessoren beim Booten auf dem virtuellen Mainboard einlöten!
+        // 2. Die 3 Standard-Prozessoren beim Booten auf dem virtuellen Mainboard einlöten!
         try {
             await loadEmuCore('atari', workletRegistry.atari[0], handleWorkletMessage);
             await loadEmuCore('c64', workletRegistry.c64[0], handleWorkletMessage);
@@ -74,7 +85,7 @@ const bootScreen = document.getElementById("boot-screen");
             console.error("[CRITICAL] Cores konnten beim Booten nicht geladen werden:", err);
         }
         
-        // 3. Initialisierung des Grafik-Moduls mit asynchronem State-Routing und HUD-Callback
+        // 3. BUGFIX: Wir übergeben die dynamischen Audio-Schnittstellen (Getters) anstatt der nicht deklarierten Variablen!
         initVisuals({
             getEcoMode: () => isEcoMode,
             getCurrentOscValue: () => currentOscValue,
@@ -159,7 +170,9 @@ progressSlider.addEventListener('change', (e) => {
     }
 });
 
-// --- ASYNCHRONER WORKLET WORKER-DISPATCHER ---
+// ==========================================
+// 4. ASYNCHRONER WORKLET WORKER-DISPATCHER
+// ==========================================
 function handleWorkletMessage(e) {
     if (e.data.type === 'VISUAL_DATA') {
         currentOscValue = e.data.value;
@@ -235,7 +248,7 @@ function changeC64Subsong(subsongId) {
         // Absicherung falls lengths undefiniert ist
         let sldbLengths = trackData.lengths || [180];
         let songLengthSeconds = sldbLengths[subsongId - 1] || sldbLengths[0] || 180;
-        trackData.length = songLengthSeconds * 50; 
+        trackData.length = songLengthSeconds * 50; // Frameanzahl aktualisieren
 
         // Slider-Timeline hart zurücksetzen
         lastKnownFrame = 0;
@@ -258,9 +271,12 @@ function changeC64Subsong(subsongId) {
     }    
 }
 
+// ==========================================
+// 5. AUDIO PLAYBACK ORCHESTRIERUNG
+// ==========================================
 function startPlayback() {
     if (isPlaying || trackData.length === 0) return;
-    resumeAudioContext().catch(e=>console.log(e)); 
+    resumeAudioContext().catch(e=>console.log(e)); // AudioContext über Wrapper aufwecken
 
     isPlaying = true;
     
@@ -322,7 +338,9 @@ function stopPlayback() {
     if (sidNode) sidNode.port.postMessage({ type: 'STOP_TRACK' });
 }
 
-// --- UI & THEME LOGIK ---
+// ==========================================
+// 6. PLAYLIST & INTERFACE-THEME LOGIK
+// ==========================================
 function setTheme(themeName) {
     document.body.className = themeName;
     const tabs = document.querySelectorAll('.tab-btn');
@@ -577,7 +595,120 @@ async function selectAndPlayTrack(index, system) {
     }
 }
 
-// --- BUTTON EVENTS ---
+// ==========================================
+// 8. FULLSCREEN & iOS COMPATIBILITY HACKS
+// ==========================================
+function enterPseudoFullscreen(visualZone) {
+    visualZone.classList.add('pseudo-fullscreen');
+    document.getElementById('btn-fullscreen').innerText = '[ EXIT ]';
+    document.body.style.overflow = 'hidden'; // Scrollen der App im Hintergrund blockieren
+    document.body.appendChild(visualZone);
+    setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+}
+
+function exitPseudoFullscreen(visualZone) {
+    visualZone.classList.remove('pseudo-fullscreen');
+    document.getElementById('btn-fullscreen').innerText = '[ ⛶ ]';
+    document.body.style.overflow = ''; // Scrollen wieder erlauben
+    const demoContainer = document.getElementById('demo-container');
+    const playbackBar = document.getElementById('playback-bar');
+    if (demoContainer && playbackBar) {
+        demoContainer.insertBefore(visualZone, playbackBar);
+    }
+    setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+}
+
+function toggleFullscreen() {
+    const visualZone = document.getElementById('visual-zone');
+    if (visualZone.classList.contains('pseudo-fullscreen')) {
+        exitPseudoFullscreen(visualZone);
+        return;
+    }
+
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+        if (document.exitFullscreen) document.exitFullscreen();
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        return;
+    }
+
+    try {
+        if (visualZone.requestFullscreen) {
+            let promise = visualZone.requestFullscreen();
+            if (promise && typeof promise.catch === 'function') {
+                promise.catch((err) => {
+                    console.log("Native fullscreen rejected by Safari, triggering iOS Fallback.", err);
+                    enterPseudoFullscreen(visualZone);
+                });
+            }
+        } else if (visualZone.webkitRequestFullscreen) {
+            visualZone.webkitRequestFullscreen();
+            setTimeout(() => {
+                if (!document.webkitFullscreenElement && !visualZone.classList.contains('pseudo-fullscreen')) {
+                    console.log("Legacy webkitRequestFullscreen failed, triggering iOS Fallback.");
+                    enterPseudoFullscreen(visualZone);
+                }
+            }, 200);
+        } else {
+            enterPseudoFullscreen(visualZone);
+        }
+    } catch (err) {
+        enterPseudoFullscreen(visualZone);
+    }
+}
+
+function handleFullscreenChange() {
+    const btn = document.getElementById('btn-fullscreen');
+    const isNativeFS = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    if (isNativeFS) {
+        btn.innerText = '[ EXIT ]';
+    } else {
+        const visualZone = document.getElementById('visual-zone');
+        if (visualZone && !visualZone.classList.contains('pseudo-fullscreen')) {
+            btn.innerText = '[ ⛶ ]';
+        }
+    }
+    window.dispatchEvent(new Event('resize'));
+}
+
+// ==========================================
+// 9. PURE AUDIO (ECO) MODE & WAKE LOCKS
+// ==========================================
+const noSleepVideo = document.createElement('video');
+noSleepVideo.setAttribute('playsinline', '');
+noSleepVideo.setAttribute('muted', '');
+noSleepVideo.setAttribute('loop', '');
+noSleepVideo.src = 'data:video/mp4;base64,AAAAHGZ0eXBtcDQyAAAAAG1wNDJpc29tYXZjMQAAAz5tb292AAAAbG12aGQAAAAA/8f/3v/H/+QAAALuAAAC7gABAAABAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAGGlvZHMAAAAAE//H/+QAAALuAAAC7gABAAAAAAABAAAAMXRyYWsAAABcdGtoZAAAAAD/x//e/8f/5AAAAAEAAAAAAAAC7gAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAgAAAAIAAAAgZWR0cwAAABBlbHN0AAAAAQAAAu4AAAAAAAEAAAAAAixtZGlhAAAAIG1kaGQAAAAA/8f/3v/H/+QAAALuAAAC7gABAAAAAAAxAAAAAAAvaGRscgAAAAAAAAAAdmlkZQAAAAAAAAAAAAAAAFZpZGVvSGFuZGxlcgAAAAIcbWluZgAAABR2bWhkAAAAAQAAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAAcRzdGJsAAAAp3N0c2QAAAAAAAAAAQAAAJNhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAgACAEgAAABIAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAR//8AAAAxYXZjQwH0AAr/4QAZZ/QACq608AUBzgAAAwAABgAAAwivDxgXoAAAAQAAABhzdHRzAAAAAAAAAAEAAAABAAAC7gAAAABzdHNzAAAAAAAAAAEAAAABAAAAHHN0c2MAAAAAAAAAAQAAAAEAAAABAAAAHHN0c3oAAAAAAAAAAAAAAAEAAAAeAAAAFHN0Y28AAAAAAAAAAQAAADAAAAA0dWR0YQAAACxtZXRhAAAAAAAAAABoZGxyAAAAAAAAAABtZGlyYXBwbAAAAAAAAAAAAAAA';
+
+let wakeLock = null;
+
+async function enableEcoMode() {
+    noSleepVideo.play().catch(e => console.warn('iOS Video-Hack blockiert:', e));
+    isEcoMode = true;
+    document.getElementById('eco-overlay').classList.remove('hidden');
+    try {
+        if ('wakeLock' in navigator) {
+            wakeLock = await navigator.wakeLock.request('screen');
+            console.log('[SYSTEM] Wake Lock aktiv. Bildschirm bleibt an.');
+        }
+    } catch (err) {
+        console.warn(`Wake Lock API blockiert. Fallback läuft.`);
+    }
+}
+
+async function disableEcoMode() {
+    isEcoMode = false;
+    document.getElementById('eco-overlay').classList.add('hidden');
+    if (wakeLock !== null) {
+        await wakeLock.release();
+        wakeLock = null;
+    }
+    noSleepVideo.pause();
+    window.dispatchEvent(new Event('resize'));
+}
+
+// ==========================================
+// 10. EVENT-KOPPLUNGEN (BUTTONS & SLIDERS)
+// ==========================================
 document.getElementById('btn-play').addEventListener('click', () => {
     resumeAudioContext().catch(e=>console.log(e));
     if (isPlaying) {
@@ -612,22 +743,6 @@ document.getElementById('btn-prev').addEventListener('click', () => {
     selectAndPlayTrack(prevIdx, activeSystem);
 });
 
-// KOPPLUNG DER EVENTS: Sowohl ECO-Button als auch WAKE-UP-Button steuern die Funktionen
-document.getElementById('btn-eco').addEventListener('click', async () => {
-    // Falls audioCtx im Hintergrund schläft, über den asynchronen Modul-Wrapper aufwecken!
-    await resumeAudioContext();
-
-    if (isEcoMode) {
-        await disableEcoMode(); // 2. Druck schaltet den ECO-Modus aus!
-    } else {
-        await enableEcoMode();  // 1. Druck schaltet den ECO-Modus ein!
-    }
-});
-
-document.getElementById('btn-eco-off').addEventListener('click', async () => {
-    await disableEcoMode();
-});
-
 document.getElementById('volume-slider').addEventListener('input', (e) => {
     const masterGain = getMasterGain();
     if (masterGain) masterGain.gain.value = e.target.value;
@@ -639,7 +754,6 @@ document.getElementById('btn-hud-info').addEventListener('click', () => {
     legend.classList.toggle('hidden');
 });
 
-// --- Toggle für das gesamte DSP HUD ---
 document.getElementById('btn-hud-toggle').addEventListener('click', (e) => {
     const hud = document.getElementById('chip-hud'); 
     const body = document.getElementById('hud-body');
@@ -662,164 +776,28 @@ document.getElementById('btn-hud-toggle').addEventListener('click', (e) => {
     }
 });
 
-// --- EMU CORE WECHSEL (Dropdown) ---
 document.getElementById('core-selector').addEventListener('change', async (e) => {
     stopPlayback();
     const coreIndex = e.target.value;
     const coreConfig = workletRegistry[activeSystem][coreIndex];
     document.getElementById('hud-content') ? document.getElementById('hud-content').innerText = "RE-WIRING DSP..." : null;
-    // BUGFIX: Übergibt den handleWorkletMessage-Dispatcher asynchron an das Emu-Board!
     await loadEmuCore(activeSystem, coreConfig, handleWorkletMessage);
     startPlayback(); 
 });
 
-
-// --- FULLSCREEN TOGGLE LOGIK (Mit Promise-Catching & Brute-Force iOS-Support) ---
-
-function enterPseudoFullscreen(visualZone) {
-    visualZone.classList.add('pseudo-fullscreen');
-    document.getElementById('btn-fullscreen').innerText = '[ EXIT ]';
-    document.body.style.overflow = 'hidden'; // Scrollen der App im Hintergrund blockieren
-    
-    // Das Element aus dem Flex-Container herausreißen und an den Body hängen
-    document.body.appendChild(visualZone);
-    
-    setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
-}
-
-function exitPseudoFullscreen(visualZone) {
-    visualZone.classList.remove('pseudo-fullscreen');
-    document.getElementById('btn-fullscreen').innerText = '[ ⛶ ]';
-    document.body.style.overflow = ''; // Scrollen wieder erlauben
-    
-    const demoContainer = document.getElementById('demo-container');
-    const playbackBar = document.getElementById('playback-bar');
-    
-    // Das Element exakt an seine Ursprungsposition zurückpflanzen
-    if (demoContainer && playbackBar) {
-        demoContainer.insertBefore(visualZone, playbackBar);
-    }
-    setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
-}
-
-function toggleFullscreen() {
-    const visualZone = document.getElementById('visual-zone');
-    
-    // 1. Befinden wir uns bereits im iOS Pseudo-Vollbild?
-    if (visualZone.classList.contains('pseudo-fullscreen')) {
-        exitPseudoFullscreen(visualZone);
-        return;
-    }
-
-    // 2. Befinden wir uns im nativen Vollbild?
-    if (document.fullscreenElement || document.webkitFullscreenElement) {
-        if (document.exitFullscreen) document.exitFullscreen();
-        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-        return;
-    }
-
-    // 3. Versuch: Nativer Vollbildmodus aufrufen
-    try {
-        if (visualZone.requestFullscreen) {
-            let promise = visualZone.requestFullscreen();
-            if (promise && typeof promise.catch === 'function') {
-                // BUGFIX: iOS blockiert requestFullscreen auf DIVs und wirft eine Rejection.
-                // Das fangen wir hier live ab und starten direkt unser CSS Fallback!
-                promise.catch((err) => {
-                    console.log("Native fullscreen rejected by Safari, triggering iOS Fallback.", err);
-                    enterPseudoFullscreen(visualZone);
-                });
-            }
-        } else if (visualZone.webkitRequestFullscreen) {
-            visualZone.webkitRequestFullscreen();
-            
-            // Legacy Safari (Pre-Promise) Prüfung für ältere iPads:
-            setTimeout(() => {
-                if (!document.webkitFullscreenElement && !visualZone.classList.contains('pseudo-fullscreen')) {
-                    console.log("Legacy webkitRequestFullscreen failed, triggering iOS Fallback.");
-                    enterPseudoFullscreen(visualZone);
-                }
-            }, 200);
-        } else {
-            // Gar keine native API vorhanden -> Fallback
-            enterPseudoFullscreen(visualZone);
-        }
-    } catch (err) {
-        // Falls die native API hart abstürzt
-        enterPseudoFullscreen(visualZone);
-    }
-}
-
-// Beobachtet native Fullscreen-Zustandsänderungen zur Synchronisation des Button-Textes
-function handleFullscreenChange() {
-    const btn = document.getElementById('btn-fullscreen');
-    const isNativeFS = !!(document.fullscreenElement || document.webkitFullscreenElement);
-    
-    if (isNativeFS) {
-        btn.innerText = '[ EXIT ]';
+document.getElementById('btn-eco').addEventListener('click', async () => {
+    await resumeAudioContext();
+    if (isEcoMode) {
+        await disableEcoMode(); 
     } else {
-        // Nur wenn wir nicht im Pseudo-Modus sind, den Text zurücksetzen
-        const visualZone = document.getElementById('visual-zone');
-        if (visualZone && !visualZone.classList.contains('pseudo-fullscreen')) {
-            btn.innerText = '[ ⛶ ]';
-        }
+        await enableEcoMode();  
     }
-    // Canvas im VBLANK neu berechnen
-    window.dispatchEvent(new Event('resize'));
-}
+});
 
-// Event-Kopplung für Fullscreen
+document.getElementById('btn-eco-off').addEventListener('click', async () => {
+    await disableEcoMode();
+});
+
 document.getElementById('btn-fullscreen').addEventListener('click', toggleFullscreen);
 document.addEventListener('fullscreenchange', handleFullscreenChange);
 document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
-
-// =========================================================
-// PURE AUDIO / ECO MODE TOGGLE (Echte Modularisierung)
-// =========================================================
-
-// Unsichtbarer iOS No-Sleep Video-Hack (Base64 kodiertes, 1px großes, schwarzes MP4-Video)
-const noSleepVideo = document.createElement('video');
-noSleepVideo.setAttribute('playsinline', '');
-noSleepVideo.setAttribute('muted', '');
-noSleepVideo.setAttribute('loop', '');
-noSleepVideo.src = 'data:video/mp4;base64,AAAAHGZ0eXBtcDQyAAAAAG1wNDJpc29tYXZjMQAAAz5tb292AAAAbG12aGQAAAAA/8f/3v/H/+QAAALuAAAC7gABAAABAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAGGlvZHMAAAAAE//H/+QAAALuAAAC7gABAAAAAAABAAAAMXRyYWsAAABcdGtoZAAAAAD/x//e/8f/5AAAAAEAAAAAAAAC7gAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAgAAAAIAAAAgZWR0cwAAABBlbHN0AAAAAQAAAu4AAAAAAAEAAAAAAixtZGlhAAAAIG1kaGQAAAAA/8f/3v/H/+QAAALuAAAC7gABAAAAAAAxAAAAAAAvaGRscgAAAAAAAAAAdmlkZQAAAAAAAAAAAAAAAFZpZGVvSGFuZGxlcgAAAAIcbWluZgAAABR2bWhkAAAAAQAAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAAcRzdGJsAAAAp3N0c2QAAAAAAAAAAQAAAJNhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAgACAEgAAABIAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAR//8AAAAxYXZjQwH0AAr/4QAZZ/QACq608AUBzgAAAwAABgAAAwivDxgXoAAAAQAAABhzdHRzAAAAAAAAAAEAAAABAAAC7gAAAABzdHNzAAAAAAAAAAEAAAABAAAAHHN0c2MAAAAAAAAAAQAAAAEAAAABAAAAHHN0c3oAAAAAAAAAAAAAAAEAAAAeAAAAFHN0Y28AAAAAAAAAAQAAADAAAAA0dWR0YQAAACxtZXRhAAAAAAAAAABoZGxyAAAAAAAAAABtZGlyYXBwbAAAAAAAAAAAAAAA';
-
-let wakeLock = null;
-
-// Funktion zum Aktivieren des ECO-Modus (Pure Audio)
-async function enableEcoMode() {
-    // 1. WICHTIG FÜR iOS: Video MUSS synchron im ersten Klick-Frame starten!
-    noSleepVideo.play().catch(e => console.warn('iOS Video-Hack blockiert:', e));
-
-    isEcoMode = true;
-    document.getElementById('eco-overlay').classList.remove('hidden');
-    
-    // 2. Offizielle Wake-Lock-Methode (Desktop & Android)
-    try {
-        if ('wakeLock' in navigator) {
-            wakeLock = await navigator.wakeLock.request('screen');
-            console.log('[SYSTEM] Wake Lock aktiv. Bildschirm bleibt an.');
-        }
-    } catch (err) {
-        console.warn(`Wake Lock API blockiert. Fallback läuft.`);
-    }
-}
-
-// Funktion zum Deaktivieren des ECO-Modus (Wieder aufwecken)
-async function disableEcoMode() {
-    isEcoMode = false;
-    document.getElementById('eco-overlay').classList.add('hidden');
-    
-    // Offizielle Methode beenden
-    if (wakeLock !== null) {
-        await wakeLock.release();
-        wakeLock = null;
-    }
-    
-    // iOS Fallback beenden
-    noSleepVideo.pause();
-    
-    // Trigger ein Resize-Event, damit sich die Visualisierungs-Canvases sofort neu kalibrieren
-    window.dispatchEvent(new Event('resize'));
-}
-
