@@ -35,6 +35,15 @@ const NOISE_LUT_HZ = [
 
 // --- BOOT SEQUENZ (Modul-sicher) ---
 function initApp() {
+    // Service-Worker für iOS-Homescreen-Standalone-Modus registrieren
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('sw.js')
+                .then(reg => console.log('[PWA] Service Worker erfolgreich gekoppelt.', reg.scope))
+                .catch(err => console.warn('[PWA] Service-Worker-Kopplung fehlgeschlagen.', err));
+        });
+    }
+    
     document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             setTheme(e.target.getAttribute('data-theme'));
