@@ -3,6 +3,7 @@ import { trackRegistry } from '../tracks/registry.js';
 import { createKickSample, createBassSample, createChordSample, createSnareSample, createLeadSample } from './utils/amiga-helper.js'; 
 import { systemDescriptions, chipCheatSheets } from './content/museum.js'; // <- DIESER IMPORT MUSS INTACT SEIN!
 import { workletRegistry } from './worklets/registry.js';
+import { initScroller } from './visuals/scroller.js'; // NEU: Scroller-Modul importiert
 
 // --- GLOBALE VARIABLEN ---
 let audioCtx;
@@ -43,7 +44,7 @@ function initApp() {
                 .catch(err => console.warn('[PWA] Service-Worker-Kopplung fehlgeschlagen.', err));
         });
     }
-    
+
     document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             setTheme(e.target.getAttribute('data-theme'));
@@ -63,7 +64,12 @@ function initApp() {
         
         await initAudioEngine();
         initVisuals(); 
-        initScroller(); 
+
+        // NEU: Initialisierung mit reaktiven Gettern zur Kapselung des Scroller-States
+        initScroller(
+            () => currentScrollerText, 
+            () => isEcoMode
+        ); 
         
         // System initialisieren, aber KEINEN Track automatisch starten!
         setTheme('theme-c64');
@@ -1514,48 +1520,4 @@ function initVisuals() {
     draw();
 }
 
-function initScroller() {
-    const canvas = document.getElementById('scroller-canvas');
-    const ctx = canvas.getContext('2d');
-    canvas.width = canvas.clientWidth; canvas.height = canvas.clientHeight;
-    
-    let offset = 0;          
-    const speed = 2.5; 
-    const baseGreets = " +++ AT LAST, THE ULTIMATE HTML5 MUSIC DISK IS COMPLETE +++ CODE & DSP MAGIK RUNNING AT A SOLID 50 HZ VBLANK +++ DEEP CHIP EMULATION VIA AUDIOWORKLETS +++ NO MP3, NO BULLSHIT, JUST PURE MATHEMATICS +++ GREETS FLY OUT TO ALL THE PIXEL PUSHERS, CYCLE CRUNCHERS AND WAVEFORM WIZARDS OUT THERE +++ TO EVERYONE WHO STILL KEEPS THE SPIRIT OF THE 8-BIT AND 16-BIT ERA ALIVE +++ TO THE TRUE LOVERS OF DEMOSCENE ART AND CHIPTUNE MAGIC +++ LET THE ANALOG FILTERS BURN +++ WRAP AROUND +++ ";
-    
-    function draw() {
 
-        if (isEcoMode) {
-            requestAnimationFrame(draw);
-            return; // Scroller-Berechnung stoppen!
-        }
-
-        ctx.fillStyle = '#000000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-        const isAmiga = document.body.classList.contains('theme-amiga');
-        const isAtari = document.body.classList.contains('theme-atari');
-        
-        ctx.fillStyle = isAtari ? '#55ff55' : isAmiga ? '#ff8800' : '#6c5eb5';
-        ctx.font = isAmiga || isAtari ? "32px 'VT323', monospace" : "24px 'Press Start 2P', monospace";
-        ctx.textBaseline = "middle";
-        
-        // BUGFIX: VT323-Metrik-Kompensation (zieht die tiefhängende Schrift sachte nach oben)
-        let fontMetricOffset = (isAmiga || isAtari) ? -(canvas.height * 0.08) : 0;
-
-        let fullText = currentScrollerText + baseGreets;
-        const charWidth = ctx.measureText("A").width;
-        let startX = canvas.width - offset;
-        
-        for (let i = 0; i < fullText.length; i++) {
-            let x = startX + (i * charWidth);
-            if (x > -50 && x < canvas.width + 50) {
-                // BUGFIX: Amplituden weiter gestaucht (insg. max 22% Auslenkung) für sichere Pufferzonen
-                let wave1 = Math.sin((x * 0.01) + (offset * 0.04)) * (canvas.height * 0.16); // Von 22% auf 16% gedämpft
-                let wave2 = Math.cos((x * 0.02) + (offset * 0.07)) * (canvas.height * 0.06); // Von 8% auf 6% gedämpft
-                ctx.fillText(fullText[i], x, (canvas.height / 2) + wave1 + wave2 + fontMetricOffset);
-            }
-        }
-        offset = (offset + speed) > (charWidth * fullText.length + canvas.width) ? 0 : offset + speed;
-        requestAnimationFrame(draw);
-    }
-    draw();
-}
