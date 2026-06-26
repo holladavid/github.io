@@ -728,55 +728,79 @@ document.getElementById('volume-slider').addEventListener('input', (e) => {
     if (masterGain) masterGain.gain.value = e.target.value;
 });
 
-// --- FULLSCREEN TOGGLE LOGIK (Mit nativem & Brute-Force iOS-Support) ---
+// --- FULLSCREEN TOGGLE LOGIK (Mit Promise-Catching & Brute-Force iOS-Support) ---
+
+function enterPseudoFullscreen(visualZone) {
+    visualZone.classList.add('pseudo-fullscreen');
+    document.getElementById('btn-fullscreen').innerText = '[ EXIT ]';
+    document.body.style.overflow = 'hidden'; // Scrollen der App im Hintergrund blockieren
+    
+    // Das Element aus dem Flex-Container herausreißen und an den Body hängen
+    document.body.appendChild(visualZone);
+    
+    setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+}
+
+function exitPseudoFullscreen(visualZone) {
+    visualZone.classList.remove('pseudo-fullscreen');
+    document.getElementById('btn-fullscreen').innerText = '[ ⛶ ]';
+    document.body.style.overflow = ''; // Scrollen wieder erlauben
+    
+    const demoContainer = document.getElementById('demo-container');
+    const playbackBar = document.getElementById('playback-bar');
+    
+    // Das Element exakt an seine Ursprungsposition zurückpflanzen
+    if (demoContainer && playbackBar) {
+        demoContainer.insertBefore(visualZone, playbackBar);
+    }
+    setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+}
+
 function toggleFullscreen() {
     const visualZone = document.getElementById('visual-zone');
-    const demoContainer = document.getElementById('demo-container');
-    const playbackBar = document.getElementById('playback-bar'); // Unser Ankerpunkt für die Rückkehr
     
-    // Kugel- und Safari-sichere iOS-Erkennung (iPhone, iPad, iPod incl. iPadOS 13+ Safari)
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
-                  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ||
-                  (/Macintosh/.test(navigator.userAgent) && "ontouchend" in document);
-    
-    const hasNativeSupport = !isIOS && !!(visualZone.requestFullscreen || visualZone.webkitRequestFullscreen);
-    
-    if (hasNativeSupport) {
-        if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-            if (visualZone.requestFullscreen) {
-                visualZone.requestFullscreen();
-            } else if (visualZone.webkitRequestFullscreen) {
-                visualZone.webkitRequestFullscreen();
+    // 1. Befinden wir uns bereits im iOS Pseudo-Vollbild?
+    if (visualZone.classList.contains('pseudo-fullscreen')) {
+        exitPseudoFullscreen(visualZone);
+        return;
+    }
+
+    // 2. Befinden wir uns im nativen Vollbild?
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+        if (document.exitFullscreen) document.exitFullscreen();
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        return;
+    }
+
+    // 3. Versuch: Nativer Vollbildmodus aufrufen
+    try {
+        if (visualZone.requestFullscreen) {
+            let promise = visualZone.requestFullscreen();
+            if (promise && typeof promise.catch === 'function') {
+                // BUGFIX: iOS blockiert requestFullscreen auf DIVs und wirft eine Rejection.
+                // Das fangen wir hier live ab und starten direkt unser CSS Fallback!
+                promise.catch((err) => {
+                    console.log("Native fullscreen rejected by Safari, triggering iOS Fallback.", err);
+                    enterPseudoFullscreen(visualZone);
+                });
             }
+        } else if (visualZone.webkitRequestFullscreen) {
+            visualZone.webkitRequestFullscreen();
+            
+            // Legacy Safari (Pre-Promise) Prüfung für ältere iPads:
+            setTimeout(() => {
+                if (!document.webkitFullscreenElement && !visualZone.classList.contains('pseudo-fullscreen')) {
+                    console.log("Legacy webkitRequestFullscreen failed, triggering iOS Fallback.");
+                    enterPseudoFullscreen(visualZone);
+                }
+            }, 200);
         } else {
-            if (document.exitFullscreen) {
-                document.exitFullscreen();
-            } else if (document.webkitExitFullscreen) {
-                document.webkitExitFullscreen();
-            }
+            // Gar keine native API vorhanden -> Fallback
+            enterPseudoFullscreen(visualZone);
         }
-    } else {
-        // iOS / iPhone Brute-Force Pseudo-Fullscreen Fallback!
-        const isPseudo = visualZone.classList.toggle('pseudo-fullscreen');
-        const btn = document.getElementById('btn-fullscreen');
-        
-        if (isPseudo) {
-            btn.innerText = '[ EXIT ]';
-            // BUGFIX iOS: Das Element aus dem Flex-Container herausreißen und direkt an den Body hängen!
-            // Nur so ignoriert Safari auf iPhones alle layout-technischen Einschränkungen.
-            document.body.appendChild(visualZone);
-        } else {
-            btn.innerText = '[ ⛶ ]';
-            // Das Element exakt an seine Ursprungsposition (vor die Playback-Bar) zurückpflanzen
-            if (demoContainer && playbackBar) {
-                demoContainer.insertBefore(visualZone, playbackBar);
-            }
-        }
-        
-        // Gib dem iOS Safari DOM 50 Millisekunden Zeit für das Reparenting, bevor das Canvas resizt!
-        setTimeout(() => {
-            window.dispatchEvent(new Event('resize'));
-        }, 50);
+    } catch (err) {
+        // Falls die native API hart abstürzt
+        enterPseudoFullscreen(visualZone);
     }
 }
 
@@ -788,11 +812,20 @@ function handleFullscreenChange() {
     if (isNativeFS) {
         btn.innerText = '[ EXIT ]';
     } else {
-        btn.innerText = '[ ⛶ ]';
+        // Nur wenn wir nicht im Pseudo-Modus sind, den Text zurücksetzen
+        const visualZone = document.getElementById('visual-zone');
+        if (visualZone && !visualZone.classList.contains('pseudo-fullscreen')) {
+            btn.innerText = '[ ⛶ ]';
+        }
     }
     // Canvas im VBLANK neu berechnen
     window.dispatchEvent(new Event('resize'));
 }
+
+// Event-Kopplung
+document.getElementById('btn-fullscreen').addEventListener('click', toggleFullscreen);
+document.addEventListener('fullscreenchange', handleFullscreenChange);
+document.addEventListener('webkitfullscreenchange', handleFullscreenChange); // Safari-Kopplung
 
 // Event-Kopplung
 document.getElementById('btn-fullscreen').addEventListener('click', toggleFullscreen);
