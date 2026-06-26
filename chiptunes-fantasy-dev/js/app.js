@@ -470,7 +470,7 @@ async function selectAndPlayTrack(index, system) {
             : (isC64System ? "+++ DOWNLOADING AND PARSING BINARY C64 PSID FILE... +++" : "+++ DOWNLOADING AND PARSING BINARY YM FILE... +++");
         
         try {
-            let parsedFile = await selectedSong.loadAsync();
+let parsedFile = await selectedSong.loadAsync();
             
             if (isC64System) {
                 trackData = parsedFile; 
@@ -492,8 +492,13 @@ async function selectAndPlayTrack(index, system) {
                     subsongDisplay.innerText = "";
                 }
 
-                trackData = parsedFile.frames; 
-                trackData.digidrums = parsedFile.digidrums || [];
+                // === DYNAMISCHE STRUKTUR-WEICHE FÜR SEQUENCED TRACKS ===
+                if (parsedFile.isSequenced) {
+                    trackData = parsedFile; // Komplettes Tracker-Manifest übergeben
+                } else {
+                    trackData = parsedFile.frames; // Legacy 50Hz Frame Fallback (Hippel / Jester)
+                    trackData.digidrums = parsedFile.digidrums || [];
+                }
                 
                 if (isAmigaSystem) {
                     trackData.isAmigaFile = true; 

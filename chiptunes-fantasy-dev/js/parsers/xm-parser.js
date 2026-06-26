@@ -1,5 +1,6 @@
+// === js/parsers/xm-parser.js ===
 // ==========================================
-// FASTTRACKER II (.XM) BINARY PARSER
+// FASTTRACKER II (.XM) COMPACT BINARY PARSER
 // ==========================================
 
 export async function loadXmFile(url) {
@@ -10,7 +11,6 @@ export async function loadXmFile(url) {
     const data = new Uint8Array(buffer);
     const view = new DataView(buffer);
 
-    // 1. Verifiziere XM Header
     const magic = String.fromCharCode(...data.slice(0, 17));
     if (magic !== 'Extended Module: ') {
         throw new Error("Ungültiges Dateiformat! Kein FastTracker II XM-Header gefunden.");
@@ -25,14 +25,13 @@ export async function loadXmFile(url) {
     let numPatterns = view.getUint16(70, true);
     let numInstruments = view.getUint16(72, true);
     
-    // BUGFIX: Beide Werte (Speed & Tempo) sauber deklarieren
     let defaultSpeed = view.getUint16(76, true); 
     let defaultTempo = view.getUint16(78, true);
     
-    let orderTable = [];
-    for(let i=0; i<songLength; i++) orderTable.push(data[80 + i]);
+    let orderTable = new Uint8Array(songLength);
+    for(let i=0; i<songLength; i++) orderTable[i] = data[80 + i];
 
-    // 2. Pattern-Daten parsen (Run-Length Encoding)
+    // 1. PATTERNS ZUERST PARSEN (Strikte Einhaltung der sequentiellen Dateistruktur!)
     let offset = 60 + headerSize;
     let patterns = [];
 
@@ -41,11 +40,11 @@ export async function loadXmFile(url) {
         let numRows = view.getUint16(offset + 5, true);
         let packedSize = view.getUint16(offset + 7, true);
         
-        let patternData = [];
         let ptr = offset + patHeaderLen;
+        const cellBuffer = new Uint8Array(numRows * numChannels * 6);
+        let dst = 0;
         
         for (let r = 0; r < numRows; r++) {
-            let row = [];
             for (let c = 0; c < numChannels; c++) {
                 let note=0, smp=0, vol=0, eff=0, param=0;
                 if (packedSize > 0) {
@@ -64,15 +63,33 @@ export async function loadXmFile(url) {
                         param = data[ptr++];
                     }
                 }
-                row.push({note, smp, vol, eff, param});
+                
+                // Volume Column Byte Dekompression
+                let volVal = 0xFF; 
+                if (vol >= 0x10 && vol <= 0x50) {
+                    volVal = vol - 0x10;
+                }
+                
+                // Wir speichern die rohe Note (0-97) direkt in den Period-Bytes ab (16-Bit)
+                // Das Worklet rechnet dies später zur Laufzeit zusammen mit relNote in Frequenzen um.
+                cellBuffer[dst]     = note & 0xFF;
+                cellBuffer[dst + 1] = 0; // High-Byte ungenutzt für Note
+                cellBuffer[dst + 2] = smp;
+                cellBuffer[dst + 3] = volVal;
+                cellBuffer[dst + 4] = eff;
+                cellBuffer[dst + 5] = param;
+                dst += 6;
             }
-            patternData.push(row);
         }
-        patterns.push({ numRows, rows: patternData });
+        
+        patterns.push({
+            numRows: numRows,
+            data: cellBuffer
+        });
         offset += patHeaderLen + packedSize;
     }
 
-    // 3. Instrumente & Delta-Samples extrahieren
+    // 2. INSTRUMENTE & DELTA-SAMPLES ERST DANACH PARSEN (Genau hinter den Patterns)
     let samples = {};
     let loadedSamplesCount = 0;
 
@@ -108,7 +125,6 @@ export async function loadXmFile(url) {
                     let floatData = new Float32Array(is16Bit ? sh.length/2 : sh.length);
                     let old = 0;
                     
-                    // --- FASTTRACKER DELTA DECOMPRESSION ---
                     if (is16Bit) {
                         for(let j=0; j<sh.length/2; j++) {
                             let v = view.getInt16(sDataOffset, true);
@@ -127,7 +143,6 @@ export async function loadXmFile(url) {
                         }
                     }
                     
-                    // Speichere primäres Sample (für Paula ignorieren wir Advanced Keymaps)
                     samples[`xm_sample_${i}`] = {
                         data: floatData,
                         loopStart: is16Bit ? sh.loopStart/2 : sh.loopStart,
@@ -144,81 +159,23 @@ export async function loadXmFile(url) {
         }
     }
 
-    // 4. Sequenzer Entrollen
-    // Amiga Periodentabelle (Präzise Berechnung für sauberes Tuning)
-    const amigaPeriods = new Float32Array(97);
-    for(let n=1; n<=96; n++) {
-        // XM Note 49 = C-4. Amiga C-3 = 428 (Note 37).
-        amigaPeriods[n] = 428.0 * Math.pow(2.0, (37 - n) / 12.0);
-    }
-
-    let frames = [];
-    
-    // BUGFIX: Nutze korrekt "defaultSpeed" für die Loop-Anzahl (Ticks pro Row)
-    let speed = defaultSpeed > 0 ? defaultSpeed : 6;
-
-    for (let order = 0; order < songLength; order++) {
-        let patIdx = orderTable[order];
-        let pattern = patterns[patIdx];
-        if (!pattern) continue;
-
-        for (let row = 0; row < pattern.numRows; row++) {
-            for (let tick = 0; tick < speed; tick++) {
-                let frameCmds = [];
-                for (let ch = 0; ch < numChannels; ch++) {
-                    let cell = pattern.rows[row][ch];
-                    if (tick === 0) {
-                        let cmdObj = { ch: ch };
-                        let hasData = false;
-                        
-                        if (cell.note > 0 && cell.note < 97) {
-                            let smpName = `xm_sample_${cell.smp}`;
-                            cmdObj.smp = smpName;
-                            
-                            let relNote = 0;
-                            if (samples[smpName]) {
-                                cmdObj.vol = samples[smpName].baseVolume;
-                                relNote = samples[smpName].relNote || 0;
-                            }
-                            
-                            let actualNote = cell.note + relNote;
-                            if(actualNote < 1) actualNote = 1;
-                            if(actualNote > 96) actualNote = 96;
-                            
-                            cmdObj.per = amigaPeriods[actualNote];
-                            hasData = true;
-                        } else if (cell.note === 97) {
-                            // Key Off
-                            cmdObj.vol = 0;
-                            hasData = true;
-                        }
-
-                        // Volume Column
-                        if (cell.vol >= 0x10 && cell.vol <= 0x50) {
-                            cmdObj.vol = cell.vol - 0x10;
-                            hasData = true;
-                        }
-                        
-                        // Basic Volume Effect
-                        if (cell.eff === 0x0C) {
-                            cmdObj.vol = cell.param;
-                            hasData = true;
-                        }
-
-                        if (hasData) frameCmds.push(cmdObj);
-                    }
-                }
-                frames.push({ isAmiga: true, cmds: frameCmds });
-            }
-        }
-    }
+    const estSpeed = defaultSpeed > 0 ? defaultSpeed : 6;
+    const estBpm = defaultTempo > 0 ? defaultTempo : 125;
 
     return {
-        frames: frames,
+        isSequenced: true,
+        type: 'XM',
+        songLength: songLength,
+        orderTable: orderTable,
+        patterns: patterns,
+        bpm: estBpm,
+        speed: estSpeed,
+        numChannels: numChannels,
+        length: songLength * 64 * estSpeed,
         metadata: {
             name: songName || "UNTITLED XM TRACK",
             author: trackerName,
-            comment: `16-BIT XM MODULE CRUNCHED THROUGH 8-BIT PAULA DAC`,
+            comment: `COMPACT NATIVE XM SEQUENCED IN AUDIOWORKLET`,
             type: `FastTracker II (${numChannels}-Channel)`,
             instrumentCount: loadedSamplesCount,
             patternCount: numPatterns,
