@@ -1,7 +1,7 @@
 // === js/worklets/amiga/paula-worklet.js ===
 // ==========================================
 // MOS TECHNOLOGY PAULA 8364 CHIP EMULATION
-// Dynamic Channel Allocator & High-Performance Dynamic Mixer Loop
+// With Sub-Sample Accurate Phase & Sample Pointer Alignment
 // ==========================================
 
 class StaticRCFilter {
@@ -106,7 +106,6 @@ class PaulaProcessor extends AudioWorkletProcessor {
         super();
         this.clock = 3546895; 
         
-        // 64 Kanäle für absolute Kompatibilität mit riesigen XM-Dateien initialisieren
         this.channels = [];
         for (let i = 0; i < 64; i++) {
             this.channels.push(new PaulaChannel());
@@ -125,7 +124,7 @@ class PaulaProcessor extends AudioWorkletProcessor {
         this.patterns = null;
         this.bpm = 125;
         this.speed = 6;
-        this.numChannels = 4; // Startet mit Standard 4 Kanälen
+        this.numChannels = 4; 
         
         this.currentOrder = 0;
         this.currentRow = 0;
@@ -156,7 +155,6 @@ class PaulaProcessor extends AudioWorkletProcessor {
                     };
                 }
             } else if (msg.type === 'PLAY_TRACK') {
-                // Hard Reset aller 64 Kanäle bei Songwechsel
                 for (let i = 0; i < 64; i++) {
                     this.channels[i].data = null;
                     this.channels[i].vol = 0;
@@ -187,7 +185,7 @@ class PaulaProcessor extends AudioWorkletProcessor {
                 } else {
                     this.isSequenced = false;
                     this.trackData = msg.track;
-                    this.numChannels = 4; // Fallback auf 4 Amiga-Kanäle
+                    this.numChannels = 4; 
                     this.currentFrame = 0;
                     this.sampleCounter = 0;
                     this.isPlaying = true;
@@ -232,6 +230,10 @@ class PaulaProcessor extends AudioWorkletProcessor {
 
         const rowOffset = this.currentRow * this.numChannels * 6;
 
+        // === DETERMINISTISCHE SUB-SAMPLE PHASEN-KOMPENSATION ===
+        const overshoot = -this.samplesUntilNextTick; // Fraktionaler Überhang in Samples
+        const clockTicksPerSample = this.clock / sampleRate;
+
         for (let ch = 0; ch < this.numChannels; ch++) {
             const cellOffset = rowOffset + (ch * 6);
             const period = pattern[cellOffset] | (pattern[cellOffset + 1] << 8);
@@ -250,9 +252,13 @@ class PaulaProcessor extends AudioWorkletProcessor {
             const currentSmpObj = this.samples[smpName];
 
             if (this.currentTick === 0) {
+                // --- TICK 0: Trigger Phase ---
                 if (sample > 0 && currentSmpObj && currentSmpObj.data) {
                     channel.trigger(currentSmpObj.data, currentSmpObj.loopStart, currentSmpObj.loopLen);
                     channel.vol = currentSmpObj.baseVolume; 
+                    
+                    // Sample-Zeiger sub-sample-genau ausrichten!
+                    channel.pointer = overshoot * (clockTicksPerSample / channel.per);
                 }
 
                 if (period > 0) {
@@ -269,7 +275,8 @@ class PaulaProcessor extends AudioWorkletProcessor {
                         }
                     }
                     if (period !== 0xFFFF && period !== 97) {
-                        channel.phase = 0; 
+                        // Phasen-Akkumulator exakt auf die Rhythmus-Achse synchronisieren!
+                        channel.phase = overshoot * (clockTicksPerSample / channel.per);
                     }
                 }
 
@@ -303,6 +310,7 @@ class PaulaProcessor extends AudioWorkletProcessor {
                         break;
                 }
             } else {
+                // --- TICK > 0 ---
                 switch (effect) {
                     case 0x00: 
                         if (param > 0 && channel.per > 0) {
@@ -395,7 +403,6 @@ class PaulaProcessor extends AudioWorkletProcessor {
 
             let mixedL = 0, mixedR = 0;
             
-            // === DYNAMISCHER MIXER: Verarbeitet nur Spuren, die der Song tatsächlich nutzt ===
             for (let c = 0; c < this.numChannels; c++) {
                 let sampleVal = this.channels[c].step(clockTicksPerSample);
                 if (sampleVal !== 0) {

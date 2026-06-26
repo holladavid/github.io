@@ -1,7 +1,7 @@
 // === js/worklets/atari/ym-exact.js ===
 // =========================================================
 // YM2149F CORE (CYCLE-EXACT, LOG-DAC, POLY-BLEP ANTI-ALIASING)
-// With Zero-Allocation Visualizer Buffer (Safe Clone & Correct Commands)
+// With Sub-Sample Accurate Phase & Envelope Alignment
 // =========================================================
 
 import { detectDigidrum } from '../lib/dsp-utils.js';
@@ -48,13 +48,10 @@ class YMExactProcessor extends AudioWorkletProcessor {
         this.sampleCounter = 0;
         this.isPlaying = false;
 
-        // Visualizer Zero-Allocation Ring Buffer (40 Floats * 4 Bytes = 160 Bytes)
         this.visualView = new Float32Array(40);
         
         this.port.onmessage = (event) => {
             const msg = event.data;
-
-            // === HIER SIND DIE REPARIERTEN BEFEHLSEMPFÄNGER ===
             if (msg.type === 'PLAY_TRACK') {
                 this.trackData = msg.track;
                 this.digidrums = msg.digidrums || []; 
@@ -116,6 +113,8 @@ class YMExactProcessor extends AudioWorkletProcessor {
             if (this.isPlaying && this.trackData) {
                 this.sampleCounter--;
                 if (this.sampleCounter <= 0) {
+                    // === DETERMINISTISCHE SUB-SAMPLE PHASEN-KOMPENSATION ===
+                    const overshoot = -this.sampleCounter; // Fraktionaler Überhang in Samples
                     this.sampleCounter += sampleRate / 50.0; 
                     
                     let frame = this.trackData[this.currentFrame];
@@ -123,7 +122,8 @@ class YMExactProcessor extends AudioWorkletProcessor {
                         if (r === 13) {
                             if (frame[13] !== 0xFF) {
                                 this.regs[13] = frame[13];
-                                this.envPhase = 0.0; 
+                                // Hüllkurve exakt ab dem sub-sample-genauen Startpunkt triggern!
+                                this.envPhase = overshoot * this.incEnv; 
                             }
                         } else {
                             this.regs[r] = frame[r];
@@ -135,13 +135,20 @@ class YMExactProcessor extends AudioWorkletProcessor {
                     if (activeDigiTrigger > 0 && activeDigiTrigger !== this.lastDigiTrigger) {
                         if (this.digidrums[activeDigiTrigger - 1]) {
                             this.currentDigidrum = this.digidrums[activeDigiTrigger - 1];
-                            this.digiPos = 0;
+                            // Digidrum-Startpunkt sub-sample-genau kompensieren!
+                            this.digiPos = overshoot * (7812.5 / sampleRate);
                             this.port.postMessage({ type: 'DEBUG', msg: 'Drum ' + activeDigiTrigger });
                         }
                     }
                     this.lastDigiTrigger = activeDigiTrigger;
                     
                     this.updateInternals();
+
+                    // Oszillatoren sub-sample-genau an der Rhythmus-Achse ausrichten!
+                    this.phaseA = (this.phaseA + overshoot * this.incA) % 1.0;
+                    this.phaseB = (this.phaseB + overshoot * this.incB) % 1.0;
+                    this.phaseC = (this.phaseC + overshoot * this.incC) % 1.0;
+
                     this.currentFrame = (this.currentFrame + 1) % this.trackData.length;
                 }
             }
@@ -228,7 +235,7 @@ class YMExactProcessor extends AudioWorkletProcessor {
             let isAudible = Math.abs(currentVisualValue) > 0.001;
             if (isAudible || this.wasAudible) {
                 const view = this.visualView;
-                view[0] = 2; // System Flag: 2 = Atari ST
+                view[0] = 2; 
                 view[1] = this.isPlaying ? 1 : 0;
                 view[2] = this.currentFrame;
                 view[3] = currentVisualValue;
@@ -237,7 +244,6 @@ class YMExactProcessor extends AudioWorkletProcessor {
                     view[4 + r] = this.regs[r];
                 }
 
-                // Senden ohne Transferables (Stürzt NIEMALS ab, absolut robust!)
                 this.port.postMessage(view);
             }
             this.wasAudible = isAudible;
