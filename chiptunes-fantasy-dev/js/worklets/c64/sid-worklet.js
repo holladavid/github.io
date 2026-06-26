@@ -1,7 +1,7 @@
 // === js/worklets/c64/sid-worklet.js ===
 // =========================================================
 // MOS TECHNOLOGY SID 6581 AUDIO WORKLET PROCESSOR
-// High-Fidelity Cycle-Exact CPU Lockstep Mischer & Timer Engine
+// With High-Fidelity Bilinear Trapezoidal SVF Filter
 // =========================================================
 
 import { CPU6502 } from '../lib/cpu6502.js';
@@ -19,9 +19,8 @@ class SIDProcessor extends AudioWorkletProcessor {
         this.trackData = null;
         this.isPlaying = false;
         
-        // Lockstep-Verteiler Variablen
         this.cycleAccumulator = 0.0;
-        this.vblankCycles = 19705; // Standard-PAL-VBLANK (985248 / 50 Hz)
+        this.vblankCycles = 19705; 
         this.currentFrame = 0;
         
         this.initAddress = 0;
@@ -68,7 +67,6 @@ class SIDProcessor extends AudioWorkletProcessor {
                     }
                 }
 
-                // Initial-Reset der Mischer-Verteiler
                 this.temperature = 55.0;
                 this.cycleAccumulator = 0.0;
                 this.vblankCycles = 19705;
@@ -78,7 +76,7 @@ class SIDProcessor extends AudioWorkletProcessor {
                 this.maxFrames = msg.length || 7500;
                 this.isPlaying = true;
                 
-                console.log(`[6502 CPU] Cycle-Exact Lockstep ready. CIA: ${this.useCiaTimer}`);
+                console.log(`[6502 CPU] Cycle-Exact Lockstep ready.`);
             } else if (msg.type === 'STOP_TRACK') {
                 this.isPlaying = false;
             } else if (msg.type === 'RESUME_TRACK') {
@@ -118,22 +116,17 @@ class SIDProcessor extends AudioWorkletProcessor {
                 continue; 
             }
             
-            // === NATIVE HIGH-PERFORMANCE CYCLE-EXACT LOCKSTEP ENGINE ===
             if (this.isPlaying && this.playAddress > 0) {
-                // Berechnen, wie viele CPU-Taktzyklen während dieses EINEN Audio-Samples vergangen sind
                 this.cycleAccumulator += this.clock / sampleRate;
                 let cyclesToRun = Math.floor(this.cycleAccumulator);
                 this.cycleAccumulator -= cyclesToRun;
 
-                // 1. Hardware-Interrupt Timer dekrementieren (Cycle-Exact!)
                 if (this.useCiaTimer && this.cpu.ciaTimerA > 0) {
                     this.cpu.ciaTimerA -= cyclesToRun;
                     if (this.cpu.ciaTimerA <= 0) {
-                        // Timer Reload
                         let hz = this.clock / (((this.cpu.ram[0xDC05] << 8) | this.cpu.ram[0xDC04]) || 19583);
                         this.cpu.ciaTimerA += Math.floor(this.clock / hz);
                         
-                        // CPU wecken und Play-Routine auf den Stack schieben
                         this.cpu.isIdle = false;
                         this.cpu.push(0xFF);
                         this.cpu.push(0xFE);
@@ -142,10 +135,9 @@ class SIDProcessor extends AudioWorkletProcessor {
                         this.currentFrame = (this.currentFrame + 1) % this.maxFrames;
                     }
                 } else {
-                    // Standard PAL VBLANK (50Hz) herabzählen
                     this.vblankCycles -= cyclesToRun;
                     if (this.vblankCycles <= 0) {
-                        this.vblankCycles += 19705; // PAL Frame Reload
+                        this.vblankCycles += 19705; 
                         
                         this.cpu.isIdle = false;
                         this.cpu.push(0xFF);
@@ -156,17 +148,15 @@ class SIDProcessor extends AudioWorkletProcessor {
                     }
                 }
 
-                // 2. CPU exakt für "cyclesToRun" laufen lassen
-                // Das verteilt die Register-Schreibvorgänge fließend über das Sample-Intervall
                 while (cyclesToRun > 0) {
                     if (!this.cpu.isIdle) {
                         let cyclesUsed = this.cpu.step();
                         cyclesToRun -= cyclesUsed;
                         if (this.cpu.pc === 0xFFFF) {
-                            this.cpu.isIdle = true; // Play-Routine beendet (RTS erreicht), CPU schläft wieder
+                            this.cpu.isIdle = true; 
                         }
                     } else {
-                        cyclesToRun = 0; // CPU schläft, wir können die Schleife sofort abbrechen
+                        cyclesToRun = 0; 
                     }
                 }
             }
@@ -176,6 +166,7 @@ class SIDProcessor extends AudioWorkletProcessor {
                 let voiceOut = this.sid.synthesizeVoice(v, this.clock, sampleRate);
                 
                 if (this.sid.regs[23] & (1 << v)) {
+                    // 1. Nichtlineare Grenzfrequenz
                     let cutoffReg = (this.sid.regs[21] & 7) | (this.sid.regs[22] << 3);
                     let norm = cutoffReg / 2047.0;
                     let baseCutoff = 220.0 + Math.pow(norm, 1.4) * 11500.0;
@@ -185,26 +176,27 @@ class SIDProcessor extends AudioWorkletProcessor {
                     if (activeCutoff < 30) activeCutoff = 30;
                     if (activeCutoff > 16000) activeCutoff = 16000;
 
-                    let f = 2.0 * Math.sin(Math.PI * activeCutoff / sampleRate);
-                    if (f > 1.0) f = 1.0; 
+                    // 2. Trapezoidale Integrationskoeffizienten (Bilinear Transform)
+                    let g = Math.tan(Math.PI * activeCutoff / sampleRate);
                     
                     let resReg = this.sid.regs[23] >> 4;
                     let normRes = resReg / 15.0;
                     let q = 1.0 - normRes * 0.92;
-                    
                     let thermalDamp = 1.0 + (this.temperature - 55.0) * 0.0015;
                     q = Math.min(1.0, Math.max(0.04, q * thermalDamp));
 
-                    let saturatedBand = this.sid.filterBand / (1.0 + Math.abs(this.sid.filterBand));
-                    this.sid.filterLow += f * saturatedBand;
+                    // 3. ZERO-DELAY BILINEAR TRANSFORM SVF SOLVER
+                    // Errechnet die Schleife mathematisch verzögerungsfrei
+                    let h = voiceOut - this.sid.filterLow;
+                    let hp = (h - q * this.sid.filterBand) / (1.0 + g * (g + q));
+                    let bp = this.sid.filterBand + g * hp;
+                    let lp = this.sid.filterLow + g * bp;
                     
-                    let feedback = this.sid.filterLow + q * this.sid.filterBand;
-                    let saturatedFeedback = feedback / (1.0 + Math.abs(feedback));
-                    let high = voiceOut - saturatedFeedback;
+                    // Zustände aktualisieren (inklusive schnellem algebraischen Sättigungsbegrenzer)
+                    this.sid.filterLow = lp;
+                    this.sid.filterBand = bp / (1.0 + Math.abs(bp) * 0.15); // Sanfte analoge Resonanzbegrenzung
                     
-                    let saturatedHigh = high / (1.0 + Math.abs(high));
-                    this.sid.filterBand += f * saturatedHigh;
-                    
+                    // Anti-Windup Hard-Clamping
                     if (this.sid.filterBand > 3.0) this.sid.filterBand = 3.0;
                     if (this.sid.filterBand < -3.0) this.sid.filterBand = -3.0;
                     if (this.sid.filterLow > 3.0) this.sid.filterLow = 3.0;
@@ -213,8 +205,9 @@ class SIDProcessor extends AudioWorkletProcessor {
                     let filterOut = 0;
                     if (this.sid.filterMode & 16) filterOut += this.sid.filterLow; 
                     if (this.sid.filterMode & 32) filterOut += this.sid.filterBand; 
-                    if (this.sid.filterMode & 64) filterOut += saturatedHigh; 
+                    if (this.sid.filterMode & 64) filterOut += hp; 
                     
+                    // 4. Analoges Signal-Leakage
                     let leakage = voiceOut * 0.11;
                     voiceOut = filterOut + leakage;
                 }
