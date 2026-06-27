@@ -1,7 +1,7 @@
 // === js/worklets/amiga/paula-worklet.js ===
 // ==========================================
 // MOS TECHNOLOGY PAULA 8364 CHIP EMULATION
-// With Constant-Power Stereo Panning, Vibrato LFO & Sample-Swap Retriggering
+// With Sub-Sample Phase Synchronization & Note-On Trigger Resolution
 // ==========================================
 
 class StaticRCFilter {
@@ -253,7 +253,7 @@ class PaulaProcessor extends AudioWorkletProcessor {
         };
     }
 
-    processTrackerTick() {
+    processTrackerTick(overshoot) {
         if (this.currentOrder >= this.songLength) {
             this.currentOrder = 0; 
         }
@@ -267,7 +267,6 @@ class PaulaProcessor extends AudioWorkletProcessor {
 
         const rowOffset = this.currentRow * this.numChannels * 6;
 
-        const overshoot = -this.samplesUntilNextTick; 
         const clockTicksPerSample = this.clock / sampleRate;
 
         for (let ch = 0; ch < this.numChannels; ch++) {
@@ -280,62 +279,59 @@ class PaulaProcessor extends AudioWorkletProcessor {
 
             const channel = this.channels[ch];
             
-            // Ermittle ob das geladene Instrument vom aktuell spielenden Instrument abweicht
-            const isSampleChange = (sample > 0 && sample !== channel.lastPlayedSample);
-            
-            // Tracker-Bedingung: Nur gleitend überblenden, wenn:
-            // 1. Der Kanal bereits aktiv ein Sample abspielt (channel.data !== null)
-            // 2. UND wir kein völlig neues Instrument auf diese Spur zwingen (isSampleChange)
-            const isPortamento = (effect === 0x03 || effect === 0x05) && (channel.data !== null) && !isSampleChange;
-
             if (sample > 0) {
                 channel.activeSample = sample;
             }
+            
             const activeSample = channel.activeSample || 1;
             const smpName = this.seqType === 'MOD' ? `mod_sample_${activeSample}` : `xm_sample_${activeSample}`;
             const currentSmpObj = this.samples[smpName];
 
-            if (this.currentTick === 0) {
-                if (sample > 0 && currentSmpObj && currentSmpObj.data) {
-                    if (!isPortamento) {
-                        channel.trigger(currentSmpObj.data, currentSmpObj.loopStart, currentSmpObj.loopLen);
-                        channel.pointer = overshoot * (clockTicksPerSample / channel.per);
-                        channel.lastPlayedSample = sample; // Aktualisiere den Index nur bei echtem Trigger
-                    }
-                    channel.vol = currentSmpObj.baseVolume; 
-                }
+            const isSampleChange = (sample > 0 && sample !== channel.lastPlayedSample);
+            const isPortamento = (effect === 0x03 || effect === 0x05) && (channel.data !== null) && !isSampleChange;
 
-                if (period > 0) {
-                    if (this.seqType === 'MOD') {
-                        if (isPortamento) {
-                            channel.targetPeriod = period;
-                        } else {
-                            channel.per = period;
-                            channel.basePeriod = period;
-                            channel.targetPeriod = 0;
-                        }
-                    } else { 
-                        if (period === 0xFFFF || period === 97) {
-                            channel.vol = 0; 
-                        } else {
+            if (this.currentTick === 0) {
+                const hasNote = (period > 0);
+
+                // 1. Zuerst die Frequenz (Periode) für diesen Schritt berechnen
+                if (hasNote) {
+                    let calculatedPeriod = period;
+                    if (this.seqType !== 'MOD') {
+                        if (period !== 0xFFFF && period !== 97) {
                             const relNote = currentSmpObj ? (currentSmpObj.relNote || 0) : 0;
                             const actualNote = period + relNote;
                             const clampedNote = Math.min(96, Math.max(1, actualNote));
-                            const calculatedPeriod = Math.round(428.0 * Math.pow(2.0, (37 - clampedNote) / 12.0));
-                            if (isPortamento) {
-                                channel.targetPeriod = calculatedPeriod;
-                            } else {
-                                channel.per = calculatedPeriod;
-                                channel.basePeriod = calculatedPeriod;
-                                channel.targetPeriod = 0;
-                            }
+                            calculatedPeriod = Math.round(428.0 * Math.pow(2.0, (37 - clampedNote) / 12.0));
                         }
                     }
-                    if (period !== 0xFFFF && period !== 97 && !isPortamento) {
-                        channel.phase = overshoot * (clockTicksPerSample / channel.per);
+
+                    if (isPortamento) {
+                        channel.targetPeriod = calculatedPeriod;
+                    } else {
+                        channel.per = calculatedPeriod;
+                        channel.basePeriod = calculatedPeriod;
+                        channel.targetPeriod = 0;
                     }
                 }
 
+                // 2. Nun das Sample triggern (Nutzt das aktive Instrument, auch wenn 'sample === 0' ist)
+                if (hasNote && currentSmpObj && currentSmpObj.data && !isPortamento) {
+                    channel.trigger(currentSmpObj.data, currentSmpObj.loopStart, currentSmpObj.loopLen);
+                    
+                    // Sub-Sample Phasen-Synchronisation anwenden
+                    channel.phase = overshoot * (clockTicksPerSample / channel.per);
+                    
+                    if (sample > 0) {
+                        channel.lastPlayedSample = sample;
+                    }
+                }
+
+                // Default-Lautstärke des Instruments laden
+                if (sample > 0 && currentSmpObj) {
+                    channel.vol = currentSmpObj.baseVolume; 
+                }
+
+                // Explizite Spurlautstärke anwenden (überschreibt ggf. Default-Volume)
                 if (volume !== 0xFF) {
                     channel.vol = volume; 
                 }
@@ -482,10 +478,12 @@ class PaulaProcessor extends AudioWorkletProcessor {
                 if (this.isSequenced) {
                     this.samplesUntilNextTick--;
                     if (this.samplesUntilNextTick <= 0) {
+                        const overshoot = -this.samplesUntilNextTick; 
+                        
                         const samplesPerTick = (2.5 / this.bpm) * sampleRate;
                         this.samplesUntilNextTick += samplesPerTick;
                         
-                        this.processTrackerTick();
+                        this.processTrackerTick(overshoot);
                     }
                 } else {
                     this.sampleCounter--;
