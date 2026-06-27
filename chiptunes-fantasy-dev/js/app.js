@@ -570,6 +570,9 @@ async function selectAndPlayTrack(index, system) {
                     ? `+++ BOOM! SUCCESSFULLY CRACKED OPEN BINARY PSID FILE +++ NOW PLAYING: ${meta.name.toUpperCase()} BY ${meta.author.toUpperCase()} +++ FORMAT: ${meta.type} +++ CRANK UP THE VOLUME AND LET THE ANALOG SID FILTERS SHINE +++ `
                     : `+++ BOOM! SUCCESSFULLY CRACKED OPEN BINARY FILE +++ NOW PLAYING: ${meta.name.toUpperCase()} BY ${meta.author.toUpperCase()} +++ COMMENT ALONG THE RIDE: ${meta.comment.toUpperCase() || "NO COMMENT"} +++ CRANK UP THE GAIN AND LET THE YM2149 MELT YOUR SPEAKERS +++ `);
 
+// === js/app.js (Ausschnitt: selectAndPlayTrack ab ca. Zeile 435) ===
+// ... [Dateianalyse-Logik] ...
+
             let techInfo = "";
             if (isAmigaSystem) {
                 techInfo += `<p><strong>File Signature:</strong> ${meta.type}</p>`;
@@ -606,11 +609,13 @@ async function selectAndPlayTrack(index, system) {
                 ? systemDescriptions[system] 
                 : '<p style="color: var(--text-color);">[ Museumdatenarchiv geladen, Beschreibung temporär nicht verfügbar ]</p>';
 
+            // --- NEU: Zusammenführen von Composer-Metadata und technischer Analyse ---
             document.getElementById('info-text').innerHTML = `
                 <div style="margin-bottom: 20px;">
                     <h2 style="color: var(--highlight-color);">&gt; NOW PLAYING:</h2>
                     <p style="font-size: 1.2em; padding-top: 5px;">${selectedSong.title}</p>
                 </div>
+                ${selectedSong.composerInfo ? `<div style="margin-bottom: 15px; line-height:1.6;">${selectedSong.composerInfo}</div>` : ''}
                 ${dynamicHTML}
                 <div style="margin-top: 30px; padding-top: 15px;">
                     ${systemText}
