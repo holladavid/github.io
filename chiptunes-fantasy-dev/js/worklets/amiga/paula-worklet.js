@@ -1,7 +1,7 @@
 // === js/worklets/amiga/paula-worklet.js ===
 // ==========================================
 // MOS TECHNOLOGY PAULA 8364 CHIP EMULATION
-// With 3-State Hardware Filter Cycle (Auto -> Force ON -> Force OFF -> Auto)
+// With Constant-Power Stereo Panning & Vibrato LFO
 // ==========================================
 
 class StaticRCFilter {
@@ -56,6 +56,13 @@ class PaulaChannel {
         this.targetPeriod = 0;
         this.portamentoSpeed = 0;
         this.basePeriod = 428;
+        
+        // Panning- & Vibrato-Register
+        this.pan = 0.5;
+        this.vibratoSpeed = 0;
+        this.vibratoDepth = 0;
+        this.vibratoPhase = 0;
+        this.hasVibrato = false;
     }
 
     trigger(data, loopStart, loopLen) {
@@ -150,7 +157,6 @@ class PaulaProcessor extends AudioWorkletProcessor {
         this.ledR = new AmigaLEDFilter(sampleRate);
         this.ledFilterOn = true; 
         
-        // === NEU: 3-STUFIGER FILTER STATUS-WERTE (0 = Auto, 1 = Force ON, 2 = Force OFF) ===
         this.filterModeState = 0; 
 
         this.port.onmessage = (e) => {
@@ -160,6 +166,7 @@ class PaulaProcessor extends AudioWorkletProcessor {
                     this.samples[msg.name] = msg.data;
                 }
             } else if (msg.type === 'PLAY_TRACK') {
+                const isXM = msg.track && msg.track.type === 'XM';
                 for (let i = 0; i < 64; i++) {
                     this.channels[i].data = null;
                     this.channels[i].vol = 0;
@@ -173,9 +180,20 @@ class PaulaProcessor extends AudioWorkletProcessor {
                     this.channels[i].targetPeriod = 0;
                     this.channels[i].portamentoSpeed = 0;
                     this.channels[i].basePeriod = 428;
+                    
+                    // XM-Spuren starten standardmäßig zentriert, MODs im klassischen L-R-R-L Schema
+                    if (isXM) {
+                        this.channels[i].pan = 0.5;
+                    } else {
+                        const panMod = i % 4;
+                        this.channels[i].pan = (panMod === 0 || panMod === 3) ? 0.0 : 1.0;
+                    }
+                    this.channels[i].vibratoSpeed = 0;
+                    this.channels[i].vibratoDepth = 0;
+                    this.channels[i].vibratoPhase = 0;
+                    this.channels[i].hasVibrato = false;
                 }
 
-                // Bei jedem neuen Track den Modus zurück auf AUTO stellen
                 this.filterModeState = 0;
 
                 if (msg.track && msg.track.isSequenced) {
@@ -222,12 +240,11 @@ class PaulaProcessor extends AudioWorkletProcessor {
                     if (this.trackData) this.currentFrame = msg.frame % this.trackData.length;
                 }
             } else if (msg.type === 'CYCLE_FILTER') {
-                // === ROTATION DES ZYKLUSBEFEHLS (Auto -> Force ON -> Force OFF -> Auto) ===
                 this.filterModeState = (this.filterModeState + 1) % 3;
                 if (this.filterModeState === 1) {
-                    this.ledFilterOn = true;  // Force ON (LED wird gedimmt)
+                    this.ledFilterOn = true; 
                 } else if (this.filterModeState === 2) {
-                    this.ledFilterOn = false; // Force OFF (LED wird hell)
+                    this.ledFilterOn = false; 
                 }
             }
         };
@@ -259,10 +276,6 @@ class PaulaProcessor extends AudioWorkletProcessor {
             const param = pattern[cellOffset + 5];
 
             const channel = this.channels[ch];
-            
-            // Portamento darf nur greifen, wenn der Kanal bereits aktiv ein Sample abspielt.
-            // Ist der Kanal stumm (channel.data === null), erzwingen wir ein normales Note-Triggering,
-            // um den Attack/Anschlag des Instruments nicht zu verschlucken.
             const isPortamento = (effect === 0x03 || effect === 0x05) && (channel.data !== null);
 
             if (sample > 0) {
@@ -316,11 +329,28 @@ class PaulaProcessor extends AudioWorkletProcessor {
                     channel.vol = volume; 
                 }
 
+                // Vibrato zurücksetzen, wenn kein neuer Vibrato-Befehl anliegt
+                if (effect !== 0x04) {
+                    channel.hasVibrato = false;
+                }
+
                 switch (effect) {
                     case 0x03:
                         if (param > 0) {
                             channel.portamentoSpeed = param;
                         }
+                        break;
+                    case 0x04: // Vibrato (Tick 0)
+                        if (param > 0) {
+                            const speed = (param >> 4) & 0x0F;
+                            const depth = param & 0x0F;
+                            if (speed > 0) channel.vibratoSpeed = speed;
+                            if (depth > 0) channel.vibratoDepth = depth;
+                        }
+                        channel.hasVibrato = true;
+                        break;
+                    case 0x08: // Set Panning (0x00 - 0xFF)
+                        channel.pan = param / 255.0;
                         break;
                     case 0x0C: 
                         channel.vol = param > 64 ? 64 : param;
@@ -347,7 +377,6 @@ class PaulaProcessor extends AudioWorkletProcessor {
                         break;
                     case 0x0E:
                         if ((param & 0xF0) === 0x00) { 
-                            // === DEKODIERUNG NUR AUSFÜHREN, WENN WIR IM AUTO MODUS (0) SIND! ===
                             if (this.filterModeState === 0) {
                                 this.ledFilterOn = (param & 0x0F) === 0; 
                             }
@@ -391,6 +420,13 @@ class PaulaProcessor extends AudioWorkletProcessor {
                             } else if (slideDown > 0) {
                                 channel.vol = Math.max(0, channel.vol - slideDown);
                             }
+                        }
+                        break;
+                    case 0x04: // Vibrato (Tick > 0)
+                        if (channel.hasVibrato) {
+                            channel.vibratoPhase = (channel.vibratoPhase + channel.vibratoSpeed) & 63;
+                            const vibOffset = Math.sin(channel.vibratoPhase * (Math.PI / 32)) * channel.vibratoDepth * 2.5; 
+                            channel.per = Math.max(113, Math.min(856, Math.round(channel.basePeriod + vibOffset)));
                         }
                         break;
                     case 0x0A: 
@@ -470,8 +506,10 @@ class PaulaProcessor extends AudioWorkletProcessor {
             for (let c = 0; c < this.numChannels; c++) {
                 let sampleVal = this.channels[c].step(clockTicksPerSample);
                 if (sampleVal !== 0) {
-                    if ((c % 4) === 0 || (c % 4) === 3) mixedL += sampleVal; 
-                    else mixedR += sampleVal; 
+                    // Dynamisches Constant-Power-Panning anwenden
+                    const pan = this.channels[c].pan;
+                    mixedL += sampleVal * Math.cos(pan * Math.PI * 0.5); 
+                    mixedR += sampleVal * Math.sin(pan * Math.PI * 0.5); 
                 }
             }
             
@@ -525,7 +563,6 @@ class PaulaProcessor extends AudioWorkletProcessor {
                     view[34 + c] = ch.data ? (ch.vol / 64.0) : 0.0;
                 }
 
-                // === USER OVERRIDE STATE IN DEN PUFFER ÜBERTRAGEN (0 = Auto, 1/2 = Override) ===
                 view[38] = this.filterModeState;
 
                 this.port.postMessage(view);
