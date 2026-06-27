@@ -1,13 +1,8 @@
 // === js/worklets/lib/sid-chip.js ===
 // ==========================================
 // MOS Technology SID 6581 Sound Chip Emulation
-// Cycle-Exact 15-Bit ADSR & Physical NMOS Transistor Waveform Mixing Model
+// Pure Cycle-Exact 985.248 Hz Native Clock Synthesis
 // ==========================================
-
-const ADSR_RATES_S = [
-    0.006, 0.024, 0.054, 0.090, 0.150, 0.260, 0.300, 0.390,
-    0.540, 0.800, 1.500, 3.000, 4.500, 5.700, 9.000, 24.00
-];
 
 const ENV_ATTACK = 0, ENV_DECAY = 1, ENV_SUSTAIN = 2, ENV_RELEASE = 3;
 
@@ -19,16 +14,23 @@ const RATE_COUNTER_PERIOD = [
 export class SIDChip {
     constructor() {
         this.regs = new Uint8Array(29);
-        this.voices = [
-            { freq: 0, pw: 2048, ctrl: 0, env: 0, phase: 0, state: ENV_RELEASE, prevGate: false, waveOut8Bit: 0, env8Bit: 0, lfsr: 0x7FFFFF, rate_counter: 0, exponential_counter: 0, envelope_counter: 0 },
-            { freq: 0, pw: 2048, ctrl: 0, env: 0, phase: 0, state: ENV_RELEASE, prevGate: false, waveOut8Bit: 0, env8Bit: 0, lfsr: 0x7FFFFF, rate_counter: 0, exponential_counter: 0, envelope_counter: 0 },
-            { freq: 0, pw: 2048, ctrl: 0, env: 0, phase: 0, state: ENV_RELEASE, prevGate: false, waveOut8Bit: 0, env8Bit: 0, lfsr: 0x7FFFFF, rate_counter: 0, exponential_counter: 0, envelope_counter: 0 }
-        ];
+        this.voices = [];
+        for (let i = 0; i < 3; i++) {
+            this.voices.push({
+                freq: 0, pw: 2048, ctrl: 0, env: 0, phase: 0,
+                state: ENV_RELEASE, prevGate: false,
+                waveOut8Bit: 0, env8Bit: 0, lfsr: 0x7FFFFF,
+                rate_counter: 0, exponential_counter: 0, envelope_counter: 0
+            });
+        }
         this.cutoff = 30; this.resonance = 0; this.filterMode = 0; this.masterVol = 0;
         this.filterLow = 0; this.filterBand = 0;
+        this.temperature = 55.0;
+        this.outputSample = 0;
     }
 
     writeReg(reg, val) {
+        if (reg >= 29) return;
         this.regs[reg] = val;
         
         let vIdx = Math.floor(reg / 7);
@@ -52,7 +54,6 @@ export class SIDChip {
                 ch.phase = 0; 
                 ch.lfsr = 0x7FFFFF;
             }
-            
         } else if (reg === 21 || reg === 22) {
             let cutoffReg = (this.regs[21] & 7) | (this.regs[22] << 3);
             this.cutoff = 30 + (cutoffReg * 8);
@@ -74,7 +75,7 @@ export class SIDChip {
         return RATE_COUNTER_PERIOD[sr & 15]; 
     }
 
-    clockEnvelope(v, cycles) {
+    clockEnvelopeOneCycle(v) {
         let ch = this.voices[v];
         if (ch.state === ENV_SUSTAIN) {
             let sr = this.regs[v * 7 + 6];
@@ -84,84 +85,76 @@ export class SIDChip {
 
         let ratePeriod = this.getRatePeriod(v, ch.state);
 
-        while (cycles > 0) {
-            if (ch.rate_counter <= 0) {
-                ch.rate_counter += ratePeriod; 
+        if (ch.rate_counter <= 0) {
+            ch.rate_counter += ratePeriod; 
 
-                let expPeriod = 1;
-                if (ch.state !== ENV_ATTACK) {
-                    let envVal = ch.envelope_counter;
-                    if (envVal >= 93) expPeriod = 1;
-                    else if (envVal >= 54) expPeriod = 2;
-                    else if (envVal >= 26) expPeriod = 4;
-                    else if (envVal >= 14) expPeriod = 8;
-                    else if (envVal >= 6) expPeriod = 16;
-                    else expPeriod = 30;
-                }
+            let expPeriod = 1;
+            if (ch.state !== ENV_ATTACK) {
+                let envVal = ch.envelope_counter;
+                if (envVal >= 93) expPeriod = 1;
+                else if (envVal >= 54) expPeriod = 2;
+                else if (envVal >= 26) expPeriod = 4;
+                else if (envVal >= 14) expPeriod = 8;
+                else if (envVal >= 6) expPeriod = 16;
+                else expPeriod = 30;
+            }
 
-                ch.exponential_counter++;
-                if (ch.exponential_counter >= expPeriod) {
-                    ch.exponential_counter = 0;
+            ch.exponential_counter++;
+            if (ch.exponential_counter >= expPeriod) {
+                ch.exponential_counter = 0;
 
-                    if (ch.state === ENV_ATTACK) {
-                        ch.envelope_counter++;
-                        if (ch.envelope_counter >= 255) {
-                            ch.envelope_counter = 255;
-                            ch.state = ENV_DECAY;
-                        }
-                    } else if (ch.state === ENV_DECAY) {
-                        let sr = this.regs[v * 7 + 6];
-                        let sustainVal = (sr >> 4) | ((sr >> 4) << 4);
-                        
-                        if (ch.envelope_counter > sustainVal) {
-                            ch.envelope_counter--;
-                        } else {
-                            ch.state = ENV_SUSTAIN;
-                        }
-                    } else if (ch.state === ENV_RELEASE) {
-                        if (ch.envelope_counter > 0) {
-                            ch.envelope_counter--;
-                        }
+                if (ch.state === ENV_ATTACK) {
+                    ch.envelope_counter++;
+                    if (ch.envelope_counter >= 255) {
+                        ch.envelope_counter = 255;
+                        ch.state = ENV_DECAY;
+                    }
+                } else if (ch.state === ENV_DECAY) {
+                    let sr = this.regs[v * 7 + 6];
+                    let sustainVal = (sr >> 4) | ((sr >> 4) << 4);
+                    
+                    if (ch.envelope_counter > sustainVal) {
+                        ch.envelope_counter--;
+                    } else {
+                        ch.state = ENV_SUSTAIN;
+                    }
+                } else if (ch.state === ENV_RELEASE) {
+                    if (ch.envelope_counter > 0) {
+                        ch.envelope_counter--;
                     }
                 }
             }
-            
-            let step = Math.min(cycles, ch.rate_counter);
-            ch.rate_counter -= step;
-            cycles -= step;
         }
+        
+        ch.rate_counter--;
     }
 
-    synthesizeVoice(v, clock, sampleRate, cyclesToRun) {
+    synthesizeVoiceOneCycle(v) {
         let ch = this.voices[v];
 
-        // 1. Taktgenaues ADSR-Update
-        this.clockEnvelope(v, cyclesToRun);
-
-        // 2. Phasen-Akkumulator & Noise-Shift berechnen
+        // Phasen-Akkumulator & Noise-Shift berechnen (1 cycle bei 985.248 Hz)
         if ((ch.ctrl & 8) === 0) {
-            let oldAcc = Math.floor(ch.phase * 16777216.0);
-            let phaseInc = ((ch.freq * clock) / 16777216.0) / sampleRate;
-            ch.phase += phaseInc;
+            let oldAcc = ch.phase;
             
-            let newAcc = Math.floor(ch.phase * 16777216.0);
-            ch.phase %= 1.0;
+            // Reines 24-Bit-Register addieren
+            ch.phase = (ch.phase + ch.freq) & 0xFFFFFF;
+            let newAcc = ch.phase;
 
-            // LFSR Noise Shift (16x f_out)
-            let oldStep = Math.floor(oldAcc / 524288) & 31;
-            let newStep = Math.floor(newAcc / 524288) & 31;
-            let shifts = (newStep - oldStep + 32) & 31;
+            // LFSR Noise Shift (Triggert wenn Bit 19 im Akkumulator umschlägt)
+            let oldStep = (oldAcc >> 19) & 1;
+            let newStep = (newAcc >> 19) & 1;
 
-            for (let s = 0; s < shifts; s++) {
+            if (oldStep !== newStep) {
                 let bit = ((ch.lfsr >> 22) ^ (ch.lfsr >> 17)) & 1;
                 ch.lfsr = ((ch.lfsr << 1) & 0x7FFFFF) | bit;
             }
         }
 
-        // Grundwellenformen als kontinuierliche Floats (0.0 bis 1.0) berechnen
-        let tri = ch.phase < 0.5 ? ch.phase * 2.0 : (1.0 - ch.phase) * 2.0;
-        let saw = 1.0 - ch.phase;
-        let pulseHigh = ch.phase > (ch.pw / 4095.0);
+        let phaseFloat = ch.phase / 16777216.0;
+
+        let tri = phaseFloat < 0.5 ? phaseFloat * 2.0 : (1.0 - phaseFloat) * 2.0;
+        let saw = 1.0 - phaseFloat;
+        let pulseHigh = (ch.phase >> 12) > ch.pw; // pw ist 12-Bit (0-4095)
         let noiseHigh = ((ch.lfsr >> 22) & 1) === 1;
 
         let waveOutVal = 0;
@@ -172,43 +165,32 @@ export class SIDChip {
         let hasPulse = (ch.ctrl & 64) !== 0;
         let hasNoise = (ch.ctrl & 128) !== 0;
 
-        // === REALISTISCHES PHYSICAL-MODEL DER ANALOGEN NMOS-WAVEFORM-MISCHUNG ===
-        // Emuliert die gegenseitige Spannungs- und Schwellenstrombelastung der Transistoren
+        // Analoge Transistor-Mischkurve
         if (hasTri && hasSaw && hasPulse) {
-            // Tri + Saw + Pulse (0x70)
             let trisaw = tri * saw * 1.4;
             if (trisaw > 1.0) trisaw = 1.0;
-            let val = pulseHigh ? (trisaw * 0.78 + 0.22) : (trisaw * 0.12);
-            waveOutVal = val;
+            waveOutVal = pulseHigh ? (trisaw * 0.78 + 0.22) : (trisaw * 0.12);
             hasWave = true;
         } else if (hasTri && hasSaw) {
-            // Tri + Saw (0x30): Das Dreieck moduliert die Gate-Spannung des Sägezahn-Kanals
             let val = tri * saw * 1.4;
             if (val > 1.0) val = 1.0;
             waveOutVal = val;
             hasWave = true;
         } else if (hasTri && hasPulse) {
-            // Tri + Pulse (0x50): Gate-Sinking mit 12% analogem Leckstrom (Leakage)
-            let val = pulseHigh ? (tri * 0.78 + 0.22) : (tri * 0.12);
-            waveOutVal = val;
+            waveOutVal = pulseHigh ? (tri * 0.78 + 0.22) : (tri * 0.12);
             hasWave = true;
         } else if (hasSaw && hasPulse) {
-            // Saw + Pulse (0x60)
-            let val = pulseHigh ? (saw * 0.78 + 0.22) : (saw * 0.12);
-            waveOutVal = val;
+            waveOutVal = pulseHigh ? (saw * 0.78 + 0.22) : (saw * 0.12);
             hasWave = true;
         } else if (hasNoise && (hasTri || hasSaw || hasPulse)) {
-            // Noise moduliert Trägerwellen analog als ultraschneller Torschalter
             let carrier = 1.0;
             if (hasTri) carrier = tri;
             else if (hasSaw) carrier = saw;
             else if (hasPulse) carrier = pulseHigh ? 1.0 : 0.0;
             
-            let val = noiseHigh ? (carrier * 0.78 + 0.22) : (carrier * 0.12);
-            waveOutVal = val;
+            waveOutVal = noiseHigh ? (carrier * 0.78 + 0.22) : (carrier * 0.12);
             hasWave = true;
         } else {
-            // Einzele-Wellenformen (Saubere float-basierte Auswertung)
             if (hasTri) {
                 waveOutVal = tri;
                 hasWave = true;
@@ -219,7 +201,6 @@ export class SIDChip {
                 waveOutVal = pulseHigh ? 1.0 : 0.0;
                 hasWave = true;
             } else if (hasNoise) {
-                // reSID-konformer 8-Bit-Abgriff aus den obersten LFSR-Zellen
                 waveOutVal = ((ch.lfsr >> 15) & 0xFF) / 255.0; 
                 hasWave = true;
             }
@@ -227,12 +208,67 @@ export class SIDChip {
 
         if (!hasWave) waveOutVal = 0.0; 
 
-        // Speichern für Hubbard-Hack und Visualizer
         ch.waveOut8Bit = Math.floor(waveOutVal * 255);
         ch.env8Bit = ch.envelope_counter;
 
-        // Bipolare Skalierung (-1.0 bis 1.0) multipliziert mit dem exponentiellen ADSR-Wert
         let waveOutFloat = (waveOutVal * 2.0) - 1.0;
         return waveOutFloat * (ch.envelope_counter / 255.0);
+    }
+
+    clock() {
+        // Envelopes triggern
+        for (let v = 0; v < 3; v++) {
+            this.clockEnvelopeOneCycle(v);
+        }
+
+        // Voices synthetisieren
+        let mix = 0;
+        for (let v = 0; v < 3; v++) {
+            let voiceOut = this.synthesizeVoiceOneCycle(v);
+            
+            if (this.regs[23] & (1 << v)) {
+                let cutoffReg = (this.regs[21] & 7) | (this.regs[22] << 3);
+                let norm = cutoffReg / 2047.0;
+                
+                let thermalCoefficient = 1.0 - (this.temperature - 55.0) * 0.0035;
+                let activeCutoff = (220.0 + Math.pow(norm, 1.4) * 11500.0) * thermalCoefficient;
+                if (activeCutoff < 30) activeCutoff = 30;
+                if (activeCutoff > 16000) activeCutoff = 16000;
+
+                // g-Parameter bei nativem 985.248 kHz Takt
+                let g = Math.PI * activeCutoff / 985248;
+                
+                let resReg = this.regs[23] >> 4;
+                let normRes = resReg / 15.0;
+                let q = 1.0 - normRes * 0.92;
+                let thermalDamp = 1.0 + (this.temperature - 55.0) * 0.0015;
+                q = Math.min(1.0, Math.max(0.04, q * thermalDamp));
+
+                // 1-MHz-stabilisierter Bilinearer SVF Solver
+                let h = voiceOut - this.filterLow;
+                let hp = (h - q * this.filterBand) / (1.0 + g * (g + q));
+                let bp = this.filterBand + g * hp;
+                let lp = this.filterLow + g * bp;
+                
+                this.filterLow = lp;
+                this.filterBand = bp / (1.0 + Math.abs(bp) * 0.15); // soft saturation
+                
+                if (this.filterBand > 3.0) this.filterBand = 3.0;
+                if (this.filterBand < -3.0) this.filterBand = -3.0;
+                if (this.filterLow > 3.0) this.filterLow = 3.0;
+                if (this.filterLow < -3.0) this.filterLow = -3.0;
+                
+                let filterOut = 0;
+                if (this.filterMode & 16) filterOut += this.filterLow; 
+                if (this.filterMode & 32) filterOut += this.filterBand; 
+                if (this.filterMode & 64) filterOut += hp; 
+                
+                let leakage = voiceOut * 0.11;
+                voiceOut = filterOut + leakage;
+            }
+            mix += voiceOut;
+        }
+
+        this.outputSample = (mix / 3.0) * this.masterVol;
     }
 }

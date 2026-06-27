@@ -1,7 +1,7 @@
 // === js/worklets/c64/sid-worklet.js ===
 // =========================================================
 // MOS TECHNOLOGY SID 6581 AUDIO WORKLET PROCESSOR
-// High-Fidelity Cycle-Exact CPU Lockstep Mischer & Bilinear SVF Filter (Safe & Fixed!)
+// High-Fidelity Cycle-Exact Lockstep Mischer & Bilinear SVF Filter
 // =========================================================
 
 import { CPU6502 } from '../lib/cpu6502.js';
@@ -30,6 +30,11 @@ class SIDProcessor extends AudioWorkletProcessor {
         this.isIrqRoutine = false; 
 
         this.temperature = 55.0;
+        
+        // --- NEU: Cycle-Exact Execution Registers ---
+        this.cpuCyclesRemaining = 0;
+        this.lastSampleValue = 0;
+        
         this.visualView = new Float32Array(40);
 
         this.port.onmessage = (e) => {
@@ -37,6 +42,7 @@ class SIDProcessor extends AudioWorkletProcessor {
             
             if (msg.type === 'SET_TEMPERATURE') {
                 this.temperature = Math.min(75, Math.max(15, msg.value));
+                this.sid.temperature = this.temperature; 
                 return;
             }
 
@@ -44,7 +50,7 @@ class SIDProcessor extends AudioWorkletProcessor {
                 this.cpu.reset(msg.loadAddress, msg.c64Code);
                 this.initAddress = msg.initAddress;
                 this.playAddress = msg.playAddress;
-                this.isIrqRoutine = false; // Zurücksetzen für neuen Track
+                this.isIrqRoutine = false; 
                 
                 let songIndex = (msg.startSong > 0 ? msg.startSong - 1 : 0) & 0xFF;
                 this.cpu.a = songIndex;
@@ -69,16 +75,17 @@ class SIDProcessor extends AudioWorkletProcessor {
                     }
                 }
 
-                // Initial-Reset der Mischer-Verteiler (Temperatur bleibt persistent!)
+                // Initial-Reset der Mischer-Verteiler
                 this.cycleAccumulator = 0.0;
                 this.vblankCycles = 19705;
+                this.cpuCyclesRemaining = 0;
                 this.cpu.isIdle = true;
 
                 this.currentFrame = 0;
                 this.maxFrames = msg.length || 7500;
                 this.isPlaying = true;
                 
-                console.log(`[6502 CPU] Cycle-Exact Lockstep ready.`);
+                console.log(`[6502 CPU] Native 1MHz Lockstep core active.`);
             } else if (msg.type === 'STOP_TRACK') {
                 this.isPlaying = false;
             } else if (msg.type === 'RESUME_TRACK') {
@@ -87,6 +94,7 @@ class SIDProcessor extends AudioWorkletProcessor {
                 this.currentFrame = msg.frame % this.maxFrames;
             } else if (msg.type === 'CHANGE_SUBSONG') {
                 this.sid = new SIDChip();
+                this.sid.temperature = this.temperature;
                 this.cpu.sid = this.sid;
                 
                 let songIndex = (msg.frame > 0 ? msg.frame - 1 : 0) & 0xFF;
@@ -99,6 +107,7 @@ class SIDProcessor extends AudioWorkletProcessor {
                 
                 this.cycleAccumulator = 0.0;
                 this.vblankCycles = 19705;
+                this.cpuCyclesRemaining = 0;
                 this.cpu.isIdle = true;
                 this.currentFrame = 0;
                 this.maxFrames = msg.length || 7500;
@@ -117,7 +126,6 @@ class SIDProcessor extends AudioWorkletProcessor {
                 continue; 
             }
             
-            // === NATIVE HIGH-PERFORMANCE CYCLE-EXACT LOCKSTEP ENGINE ===
             let cyclesToRun = 0;
             if (this.isPlaying && this.playAddress > 0) {
                 this.cycleAccumulator += this.clock / sampleRate;
@@ -131,7 +139,6 @@ class SIDProcessor extends AudioWorkletProcessor {
                         if (timerPeriod === 0) timerPeriod = 19583; 
                         this.cpu.ciaTimerA += timerPeriod;
                         
-                        // Interrupt nur auslösen, wenn die CPU bereit ist
                         if (this.cpu.isIdle) {
                             this.cpu.isIdle = false;
                             if (this.isIrqRoutine) {
@@ -167,76 +174,40 @@ class SIDProcessor extends AudioWorkletProcessor {
                     }
                 }
 
-                let remainingCycles = cyclesToRun;
-                while (remainingCycles > 0) {
-                    if (!this.cpu.isIdle) {
-                        let cyclesUsed = this.cpu.step();
-                        remainingCycles -= cyclesUsed;
-                        if (this.cpu.pc === 0xFFFE || this.cpu.pc === 0xFFFF) {
-                            this.cpu.isIdle = true; 
+                // --- THE NATIVE CYCLE-EXACT LOCKSTEP LOOP ---
+                let sampleSum = 0;
+                for (let c = 0; c < cyclesToRun; c++) {
+                    
+                    // 1. Taktgenaue CPU-Ausführung
+                    if (this.cpuCyclesRemaining <= 0) {
+                        if (!this.cpu.isIdle) {
+                            let cyclesUsed = this.cpu.step();
+                            this.cpuCyclesRemaining += cyclesUsed;
+                            if (this.cpu.pc === 0xFFFE || this.cpu.pc === 0xFFFF) {
+                                this.cpu.isIdle = true; 
+                            }
                         }
-                    } else {
-                        remainingCycles = 0; 
                     }
+                    if (this.cpuCyclesRemaining > 0) {
+                        this.cpuCyclesRemaining--;
+                    }
+                    
+                    // 2. Taktgenaue Soundchip-Aktualisierung (bei 985.248 Hz)
+                    this.sid.clock();
+                    
+                    // Für Boxcar-Downsampling akkumulieren
+                    sampleSum += this.sid.outputSample;
                 }
-            }
-
-            let mix = 0;
-            for (let v = 0; v < 3; v++) {
-                let voiceOut = this.sid.synthesizeVoice(v, this.clock, sampleRate, cyclesToRun);
                 
-                if (this.sid.regs[23] & (1 << v)) {
-                    // Grenzfrequenz (Cutoff) berechnen
-                    let cutoffReg = (this.sid.regs[21] & 7) | (this.sid.regs[22] << 3);
-                    let norm = cutoffReg / 2047.0;
-                    let baseCutoff = 220.0 + Math.pow(norm, 1.4) * 11500.0;
+                let finalSample = cyclesToRun > 0 ? sampleSum / cyclesToRun : this.lastSampleValue;
+                this.lastSampleValue = finalSample;
+                
+                finalSample = this.dcBlock.process(finalSample);
 
-                    let thermalCoefficient = 1.0 - (this.temperature - 55.0) * 0.0035;
-                    let activeCutoff = baseCutoff * thermalCoefficient;
-                    if (activeCutoff < 30) activeCutoff = 30;
-                    if (activeCutoff > 16000) activeCutoff = 16000;
-
-                    let g = Math.tan(Math.PI * activeCutoff / sampleRate);
-                    
-                    let resReg = this.sid.regs[23] >> 4;
-                    let normRes = resReg / 15.0;
-                    let q = 1.0 - normRes * 0.92;
-                    let thermalDamp = 1.0 + (this.temperature - 55.0) * 0.0015;
-                    q = Math.min(1.0, Math.max(0.04, q * thermalDamp));
-
-                    // === ZERO-DELAY BILINEAR TRANSFORM SVF SOLVER ===
-                    // Errechnet die Schleife mathematisch komplett sauber und sturzfest!
-                    let h = voiceOut - this.sid.filterLow;
-                    let hp = (h - q * this.sid.filterBand) / (1.0 + g * (g + q));
-                    let bp = this.sid.filterBand + g * hp;
-                    let lp = this.sid.filterLow + g * bp;
-                    
-                    this.sid.filterLow = lp;
-                    this.sid.filterBand = bp / (1.0 + Math.abs(bp) * 0.15); // Sanfte analoge Resonanzbegrenzung
-                    
-                    // Anti-Windup Hard-Clamping
-                    if (this.sid.filterBand > 3.0) this.sid.filterBand = 3.0;
-                    if (this.sid.filterBand < -3.0) this.sid.filterBand = -3.0;
-                    if (this.sid.filterLow > 3.0) this.sid.filterLow = 3.0;
-                    if (this.sid.filterLow < -3.0) this.sid.filterLow = -3.0;
-                    
-                    let filterOut = 0;
-                    if (this.sid.filterMode & 16) filterOut += this.sid.filterLow; 
-                    if (this.sid.filterMode & 32) filterOut += this.sid.filterBand; 
-                    if (this.sid.filterMode & 64) filterOut += hp; 
-                    
-                    let leakage = voiceOut * 0.11;
-                    voiceOut = filterOut + leakage;
-                }
-                mix += voiceOut;
+                outL[i] = finalSample;
+                if (outR) outR[i] = finalSample;
+                if (i === 0) visualValue = finalSample;
             }
-
-            let finalOut = (mix / 3.0) * this.sid.masterVol;
-            finalOut = this.dcBlock.process(finalOut);
-
-            outL[i] = finalOut;
-            if (outR) outR[i] = finalOut;
-            if (i === 0) visualValue = finalOut;
         }
 
         this.visCounter = (this.visCounter || 0) + 1;
@@ -255,7 +226,6 @@ class SIDProcessor extends AudioWorkletProcessor {
 
                 view[33] = this.temperature;
 
-                // Kanallautstärken der 3 Voices übertragen (Index 34-36)
                 for (let v = 0; v < 3; v++) {
                     view[34 + v] = this.sid.voices[v].envelope_counter / 255.0;
                 }
