@@ -1,6 +1,7 @@
 // === js/ui/hud-debugger.js ===
 // =========================================================
-// HIGH-PERFORMANCE DSP REGISTER HUD & ANALYZER MODULE
+// HIGH-PERFORMANCE REGISTER HUD & ANALYZER MODULE
+// Standardized Layouts & Context-Agnostic Render Nodes
 // =========================================================
 
 const NOISE_LUT_HZ = [
@@ -253,11 +254,7 @@ export function updateChipHUD(stateGetters) {
                                 <label>Voice3 Off</label>
                                 <div class="hud-led" id="c64-v3off-led"></div>
                             </div>
-                            <div class="hud-row" style="margin-top: 15px;">
-                                <label>Digi Hack</label>
-                                <span id="digi-g-val" class="hud-text-sel" style="flex-grow: 1;">--</span>
-                                <div id="hud-digi-led" style="width: 10px; height: 10px; border-radius: 50%; background: #440000; border: 1px solid #ff0000; box-shadow: none;"></div>
-                            </div>
+                            <!-- KORREKTUR: Unbenutzte Digi Hack Zeile für C64 entfernt -->
                         </div>
                     </div>
                 </div>
@@ -291,11 +288,7 @@ export function updateChipHUD(stateGetters) {
                                 <label>RC Filter</label>
                                 <span class="hud-text-sel" style="flex-grow: 1;">6dB Static (4.42kHz)</span>
                             </div>
-                            <div class="hud-row" style="margin-top: 15px;">
-                                <label>Digi Hack</label>
-                                <span id="digi-g-val" class="hud-text-sel" style="flex-grow: 1;">--</span>
-                                <div id="hud-digi-led" style="width: 10px; height: 10px; border-radius: 50%; background: #440000; border: 1px solid #ff0000; box-shadow: none;"></div>
-                            </div>
+                            <!-- KORREKTUR: Unbenutzte Digi Hack Zeile für Amiga entfernt -->
                         </div>
                     </div>
                 </div>
@@ -417,11 +410,9 @@ export function updateChipHUD(stateGetters) {
         
         histIdx = (histIdx + 1) % HIST_LEN;
 
-        // === THERMISCHES DRIFT-UPDATE FÜR DIE ANZEIGE DES CUTOFFS ===
-        let temp = r[29] || 28; // Aus virtuellem Register auslesen
+        let temp = r[29] || 28; 
         let fcut = (r[21] & 7) | (r[22] << 3);
         
-        // Physikalische Grenzfrequenzkompensation: Cutoff sinkt, wenn der Chip heißer wird!
         let thermalCoefficient = 1.0 - (temp - 40.0) * 0.0035;
         let fhz = (30 + (fcut * 8)) * thermalCoefficient;
         if (fhz < 30) fhz = 30;
