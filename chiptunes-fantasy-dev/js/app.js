@@ -162,7 +162,10 @@ progressSlider.addEventListener('input', (e) => {
 });
 
 progressSlider.addEventListener('change', (e) => {
-    if (trackData.length === 0) return;
+
+    // --- NEU: Generative C64 Programme können nicht per Slider gespult werden! ---
+    if (trackData.length === 0 || activeSystem === 'c64') return;
+
     const targetPercent = parseFloat(e.target.value);
     const targetFrame = Math.floor((targetPercent / 100) * trackData.length);
     
@@ -515,6 +518,9 @@ async function selectAndPlayTrack(index, system) {
     if (selectedSong.loadAsync) {
         const isAmigaSystem = (system === 'amiga');
         const isC64System = (system === 'c64');
+
+        // --- NEU: Progress-Slider für C64 Tracks aus Sicherheitsgründen sperren ---
+        document.getElementById('progress-slider').disabled = isC64System;
         
         currentScrollerText = isAmigaSystem 
             ? "+++ DOWNLOADING AND PARSING BINARY AMIGA MODULE... +++"

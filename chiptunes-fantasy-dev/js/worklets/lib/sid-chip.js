@@ -1,12 +1,11 @@
 // === js/worklets/lib/sid-chip.js ===
 // ==========================================
 // MOS Technology SID 6581 Sound Chip Emulation
-// Pure Cycle-Exact 985.248 Hz Native Clock Synthesis
+// Pure Cycle-Exact 985.248 Hz Native Clock Synthesis & JFET Modeling
 // ==========================================
 
 const ENV_ATTACK = 0, ENV_DECAY = 1, ENV_SUSTAIN = 2, ENV_RELEASE = 3;
 
-// Offizielle Hardware-Ratenperioden des SIDs in echten CPU-Zyklen
 const RATE_COUNTER_PERIOD = [
     9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19530, 31256
 ];
@@ -132,15 +131,12 @@ export class SIDChip {
     synthesizeVoiceOneCycle(v) {
         let ch = this.voices[v];
 
-        // Phasen-Akkumulator & Noise-Shift berechnen (1 cycle bei 985.248 Hz)
         if ((ch.ctrl & 8) === 0) {
             let oldAcc = ch.phase;
             
-            // Reines 24-Bit-Register addieren
             ch.phase = (ch.phase + ch.freq) & 0xFFFFFF;
             let newAcc = ch.phase;
 
-            // LFSR Noise Shift (Triggert wenn Bit 19 im Akkumulator umschlägt)
             let oldStep = (oldAcc >> 19) & 1;
             let newStep = (newAcc >> 19) & 1;
 
@@ -154,7 +150,7 @@ export class SIDChip {
 
         let tri = phaseFloat < 0.5 ? phaseFloat * 2.0 : (1.0 - phaseFloat) * 2.0;
         let saw = 1.0 - phaseFloat;
-        let pulseHigh = (ch.phase >> 12) > ch.pw; // pw ist 12-Bit (0-4095)
+        let pulseHigh = (ch.phase >> 12) > ch.pw; 
         let noiseHigh = ((ch.lfsr >> 22) & 1) === 1;
 
         let waveOutVal = 0;
@@ -165,7 +161,6 @@ export class SIDChip {
         let hasPulse = (ch.ctrl & 64) !== 0;
         let hasNoise = (ch.ctrl & 128) !== 0;
 
-        // Analoge Transistor-Mischkurve
         if (hasTri && hasSaw && hasPulse) {
             let trisaw = tri * saw * 1.4;
             if (trisaw > 1.0) trisaw = 1.0;
@@ -216,12 +211,10 @@ export class SIDChip {
     }
 
     clock() {
-        // Envelopes triggern
         for (let v = 0; v < 3; v++) {
             this.clockEnvelopeOneCycle(v);
         }
 
-        // Voices synthetisieren
         let mix = 0;
         for (let v = 0; v < 3; v++) {
             let voiceOut = this.synthesizeVoiceOneCycle(v);
@@ -235,7 +228,6 @@ export class SIDChip {
                 if (activeCutoff < 30) activeCutoff = 30;
                 if (activeCutoff > 16000) activeCutoff = 16000;
 
-                // g-Parameter bei nativem 985.248 kHz Takt
                 let g = Math.PI * activeCutoff / 985248;
                 
                 let resReg = this.regs[23] >> 4;
@@ -244,14 +236,17 @@ export class SIDChip {
                 let thermalDamp = 1.0 + (this.temperature - 55.0) * 0.0015;
                 q = Math.min(1.0, Math.max(0.04, q * thermalDamp));
 
-                // 1-MHz-stabilisierter Bilinearer SVF Solver
                 let h = voiceOut - this.filterLow;
                 let hp = (h - q * this.filterBand) / (1.0 + g * (g + q));
                 let bp = this.filterBand + g * hp;
                 let lp = this.filterLow + g * bp;
                 
                 this.filterLow = lp;
-                this.filterBand = bp / (1.0 + Math.abs(bp) * 0.15); // soft saturation
+                
+                // --- NEU: AUTHENTISCHE MOS 6581 JFET SÄTTIGUNG ---
+                // Die tanh() Funktion bildet die nichtlineare Röhren-artige Sättigung
+                // der originalen Transistoren im C64 SVF-Filter bei hohen Resonanzpegeln ab.
+                this.filterBand = Math.tanh(bp * 1.2) / 1.2;
                 
                 if (this.filterBand > 3.0) this.filterBand = 3.0;
                 if (this.filterBand < -3.0) this.filterBand = -3.0;

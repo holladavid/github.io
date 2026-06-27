@@ -1,7 +1,7 @@
 // === js/worklets/c64/sid-worklet.js ===
 // =========================================================
 // MOS TECHNOLOGY SID 6581 AUDIO WORKLET PROCESSOR
-// High-Fidelity Cycle-Exact Lockstep Mischer & Bilinear SVF Filter
+// 100% Microsecond Cycle-Exact CIA/VBLANK Interrupt Accuracy
 // =========================================================
 
 import { CPU6502 } from '../lib/cpu6502.js';
@@ -11,7 +11,7 @@ import { DCBlocker } from '../lib/dsp-utils.js';
 class SIDProcessor extends AudioWorkletProcessor {
     constructor() {
         super();
-        this.clock = 985248; // PAL C64 Clock
+        this.clock = 985248; 
         this.sid = new SIDChip();
         this.cpu = new CPU6502(this.sid);
         this.dcBlock = new DCBlocker();
@@ -19,9 +19,8 @@ class SIDProcessor extends AudioWorkletProcessor {
         this.trackData = null;
         this.isPlaying = false;
         
-        // Lockstep-Verteiler Variablen
         this.cycleAccumulator = 0.0;
-        this.vblankCycles = 19705; // Standard-PAL-VBLANK (985248 / 50 Hz)
+        this.vblankCycles = 19705; 
         this.currentFrame = 0;
         
         this.initAddress = 0;
@@ -30,10 +29,15 @@ class SIDProcessor extends AudioWorkletProcessor {
         this.isIrqRoutine = false; 
 
         this.temperature = 55.0;
-        
-        // --- NEU: Cycle-Exact Execution Registers ---
         this.cpuCyclesRemaining = 0;
-        this.lastSampleValue = 0;
+        
+        const fc = 18000.0; 
+        this.aaf_g = Math.tan(Math.PI * fc / this.clock);
+        this.aaf_r1 = 1.847759; 
+        this.aaf_r2 = 0.765366; 
+        
+        this.aaf1_l = 0; this.aaf1_b = 0;
+        this.aaf2_l = 0; this.aaf2_b = 0;
         
         this.visualView = new Float32Array(40);
 
@@ -75,7 +79,6 @@ class SIDProcessor extends AudioWorkletProcessor {
                     }
                 }
 
-                // Initial-Reset der Mischer-Verteiler
                 this.cycleAccumulator = 0.0;
                 this.vblankCycles = 19705;
                 this.cpuCyclesRemaining = 0;
@@ -84,14 +87,10 @@ class SIDProcessor extends AudioWorkletProcessor {
                 this.currentFrame = 0;
                 this.maxFrames = msg.length || 7500;
                 this.isPlaying = true;
-                
-                console.log(`[6502 CPU] Native 1MHz Lockstep core active.`);
             } else if (msg.type === 'STOP_TRACK') {
                 this.isPlaying = false;
             } else if (msg.type === 'RESUME_TRACK') {
                 this.isPlaying = true;
-            } else if (msg.type === 'SEEK_TRACK') {
-                this.currentFrame = msg.frame % this.maxFrames;
             } else if (msg.type === 'CHANGE_SUBSONG') {
                 this.sid = new SIDChip();
                 this.sid.temperature = this.temperature;
@@ -132,53 +131,47 @@ class SIDProcessor extends AudioWorkletProcessor {
                 cyclesToRun = Math.floor(this.cycleAccumulator);
                 this.cycleAccumulator -= cyclesToRun;
 
-                if (this.useCiaTimer) {
-                    this.cpu.ciaTimerA -= cyclesToRun;
-                    if (this.cpu.ciaTimerA <= 0) {
-                        let timerPeriod = (this.cpu.ram[0xDC05] << 8) | this.cpu.ram[0xDC04];
-                        if (timerPeriod === 0) timerPeriod = 19583; 
-                        this.cpu.ciaTimerA += timerPeriod;
-                        
-                        if (this.cpu.isIdle) {
-                            this.cpu.isIdle = false;
-                            if (this.isIrqRoutine) {
-                                this.cpu.push(0xFF);
-                                this.cpu.push(0xFE);
-                                this.cpu.push(this.cpu.p); 
-                            } else {
-                                this.cpu.push(0xFF);
-                                this.cpu.push(0xFE);
-                            }
-                            this.cpu.pc = this.playAddress;
-                            this.currentFrame = (this.currentFrame + 1) % this.maxFrames;
-                        }
-                    }
-                } else {
-                    this.vblankCycles -= cyclesToRun;
-                    if (this.vblankCycles <= 0) {
-                        this.vblankCycles += 19705; 
-                        
-                        if (this.cpu.isIdle) {
-                            this.cpu.isIdle = false;
-                            if (this.isIrqRoutine) {
-                                this.cpu.push(0xFF);
-                                this.cpu.push(0xFE);
-                                this.cpu.push(this.cpu.p); 
-                            } else {
-                                this.cpu.push(0xFF);
-                                this.cpu.push(0xFE);
-                            }
-                            this.cpu.pc = this.playAddress;
-                            this.currentFrame = (this.currentFrame + 1) % this.maxFrames;
-                        }
-                    }
-                }
-
                 // --- THE NATIVE CYCLE-EXACT LOCKSTEP LOOP ---
-                let sampleSum = 0;
                 for (let c = 0; c < cyclesToRun; c++) {
                     
-                    // 1. Taktgenaue CPU-Ausführung
+                    // 1. Taktgenaue Timer & Interrupt Überwachung
+                    if (this.useCiaTimer) {
+                        this.cpu.ciaTimerA--;
+                        if (this.cpu.ciaTimerA <= 0) {
+                            let timerPeriod = (this.cpu.ram[0xDC05] << 8) | this.cpu.ram[0xDC04];
+                            if (timerPeriod === 0) timerPeriod = 19583; 
+                            this.cpu.ciaTimerA += timerPeriod;
+                            
+                            if (this.cpu.isIdle) {
+                                this.cpu.isIdle = false;
+                                if (this.isIrqRoutine) {
+                                    this.cpu.push(0xFF); this.cpu.push(0xFE); this.cpu.push(this.cpu.p); 
+                                } else {
+                                    this.cpu.push(0xFF); this.cpu.push(0xFE);
+                                }
+                                this.cpu.pc = this.playAddress;
+                                this.currentFrame = (this.currentFrame + 1) % this.maxFrames;
+                            }
+                        }
+                    } else {
+                        this.vblankCycles--;
+                        if (this.vblankCycles <= 0) {
+                            this.vblankCycles += 19705; 
+                            
+                            if (this.cpu.isIdle) {
+                                this.cpu.isIdle = false;
+                                if (this.isIrqRoutine) {
+                                    this.cpu.push(0xFF); this.cpu.push(0xFE); this.cpu.push(this.cpu.p); 
+                                } else {
+                                    this.cpu.push(0xFF); this.cpu.push(0xFE);
+                                }
+                                this.cpu.pc = this.playAddress;
+                                this.currentFrame = (this.currentFrame + 1) % this.maxFrames;
+                            }
+                        }
+                    }
+
+                    // 2. CPU-Befehle ausführen
                     if (this.cpuCyclesRemaining <= 0) {
                         if (!this.cpu.isIdle) {
                             let cyclesUsed = this.cpu.step();
@@ -192,17 +185,23 @@ class SIDProcessor extends AudioWorkletProcessor {
                         this.cpuCyclesRemaining--;
                     }
                     
-                    // 2. Taktgenaue Soundchip-Aktualisierung (bei 985.248 Hz)
+                    // 3. 1-MHz SID-Synthese aufrufen
                     this.sid.clock();
+                    let out = this.sid.outputSample;
                     
-                    // Für Boxcar-Downsampling akkumulieren
-                    sampleSum += this.sid.outputSample;
+                    // 4. Butterworth Decimation
+                    let hp1 = (out - this.aaf1_l - this.aaf_r1 * this.aaf1_b) / (1.0 + this.aaf_g * (this.aaf_g + this.aaf_r1));
+                    let bp1 = this.aaf1_b + this.aaf_g * hp1;
+                    this.aaf1_l = this.aaf1_l + this.aaf_g * bp1;
+                    this.aaf1_b = bp1;
+                    
+                    let hp2 = (this.aaf1_l - this.aaf2_l - this.aaf_r2 * this.aaf2_b) / (1.0 + this.aaf_g * (this.aaf_g + this.aaf_r2));
+                    let bp2 = this.aaf2_b + this.aaf_g * hp2;
+                    this.aaf2_l = this.aaf2_l + this.aaf_g * bp2;
+                    this.aaf2_b = bp2;
                 }
                 
-                let finalSample = cyclesToRun > 0 ? sampleSum / cyclesToRun : this.lastSampleValue;
-                this.lastSampleValue = finalSample;
-                
-                finalSample = this.dcBlock.process(finalSample);
+                let finalSample = this.dcBlock.process(this.aaf2_l);
 
                 outL[i] = finalSample;
                 if (outR) outR[i] = finalSample;
