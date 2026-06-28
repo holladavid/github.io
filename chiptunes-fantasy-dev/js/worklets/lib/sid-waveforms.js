@@ -1,55 +1,44 @@
 // === js/worklets/lib/sid-waveforms.js ===
 // =========================================================
 // MOS 6581 WAVEFORM GENERATOR & BIT-LOGIC
-// Etappe 1: Ringmod Pipeline Fix & Dynamic Floating DAC
-// ==========================================
+// Hardware-accurate 8-Bit DAC quantization, Wire-AND & PWM Asymmetry
+// =========================================================
 
-/**
- * Berechnet die bitgenaue 8-Bit Wellenform des MOS 6581.
- * 
- * @param {Object} ch - Referenz auf den Kanal (für Floating DAC State)
- * @param {number} ctrl - 8-Bit Control Register (Gate, Sync, Ring, Test, Tri, Saw, Pulse, Noise)
- * @param {number} phase24 - 24-Bit Phasen-Akkumulator (0 bis 0xFFFFFF)
- * @param {number} pw12 - 12-Bit Pulse Width Register (0 bis 4095)
- * @param {number} lfsr23 - 23-Bit Noise Linear Feedback Shift Register
- * @param {number} ringMSB - MSB des vorherigen Kanals für Ringmodulation
- * @returns {number} 8-Bit DAC Output (0 bis 255)
- */
+import { PWM_LUT } from './sid-luts.js';
+
 export function calculateWaveform8Bit(ch, ctrl, phase24, pw12, lfsr23, ringMSB) {
     let out = 0xFF; 
     let hasWave = false;
 
-    if (ctrl & 16) { // Triangle
-        // --- ETAPPE 1: Ringmod Pipeline ---
-        // Die Ringmodulation invertiert das MSB des Phasen-Akkumulators VOR der eigentlichen
-        // Auswertung der Dreiecks-Zählrichtung! Das erzeugt die fehlerfreie Hardware-Symmetrie.
+    if (ctrl & 16) { 
         let bit23 = (phase24 >> 23) & 1;
-        if (ctrl & 4) {
-            bit23 ^= ringMSB;
-        }
+        if (ctrl & 4) bit23 ^= ringMSB;
 
         let tri12 = (phase24 >> 11) & 0xFFF;
-        if (bit23) {
-            tri12 = (~tri12) & 0xFFF;
-        }
+        if (bit23) tri12 = (~tri12) & 0xFFF;
         
         out &= (tri12 >> 4);
         hasWave = true;
     }
 
-    if (ctrl & 32) { // Sawtooth
+    if (ctrl & 32) { 
         out &= (phase24 >> 16) & 0xFF;
         hasWave = true;
     }
 
-    if (ctrl & 64) { // Pulse
+    if (ctrl & 64) { 
         let testPhase = (phase24 >> 12) & 0xFFF;
-        let pulseOut = (testPhase <= pw12) ? 0xFF : 0x00;
+        
+        // --- ETAPPE 2: Asymmetrischer PWM Komparator ---
+        // Nutzt die LUT, um den DC-Offset des originalen 6581 Komparators abzubilden
+        let effectivePw = PWM_LUT[pw12];
+        let pulseOut = (testPhase <= effectivePw) ? 0xFF : 0x00;
+        
         out &= pulseOut;
         hasWave = true;
     }
 
-    if (ctrl & 128) { // Noise
+    if (ctrl & 128) { 
         let noiseOut = ((lfsr23 & 0x400000) >> 15) | 
                        ((lfsr23 & 0x100000) >> 14) | 
                        ((lfsr23 & 0x010000) >> 11) | 
@@ -62,9 +51,6 @@ export function calculateWaveform8Bit(ch, ctrl, phase24, pw12, lfsr23, ringMSB) 
         hasWave = true;
     }
 
-    // --- ETAPPE 1: Dynamic Floating DAC ---
-    // Der Ausgang driftet organisch, wenn die Oszillatoren stummgeschaltet werden.
-    // Simuliert entladende Kapazitäten und DAC-Leckströme des echten Siliziums.
     if (hasWave) {
         ch.floatingLevel = out;
     } else {

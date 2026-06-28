@@ -1,10 +1,11 @@
 // === js/worklets/lib/sid-chip.js ===
 // ==========================================
 // MOS Technology SID 6581 Sound Chip Emulation
-// Etappe 1: Immortal ADSR Up-Counter, Envelope Freeze & TEST Bit Fix
+// Etappe 2: Physical LUT Architecture (Filter & R-2R DAC)
 // ==========================================
 
 import { calculateWaveform8Bit } from './sid-waveforms.js';
+import { DAC_LUT, CUTOFF_LUT } from './sid-luts.js'; // --- NEU: LUTs importieren ---
 
 const ENV_ATTACK = 0, ENV_DECAY = 1, ENV_SUSTAIN = 2, ENV_RELEASE = 3;
 const RATE_COUNTER_PERIOD = [9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19530, 31256];
@@ -56,12 +57,14 @@ export class SIDChip {
 
     updateFilterParameters() {
         let cutoffReg = (this.regs[21] & 7) | (this.regs[22] << 3);
-        let norm = cutoffReg / 2047.0;
-        let thermalCoefficient = 1.0 - (this._temperature - 55.0) * 0.0035;
         
-        // Asymmetrisches FET-Polynom (vorbereitet aus Phase 4)
-        let fetCurve = 30.0 + 250.0 * norm + 8000.0 * (norm * norm) + 8000.0 * (norm * norm * norm);
-        this.activeCutoff = fetCurve * thermalCoefficient;
+        // --- ETAPPE 2: 2048-Entry Cutoff LUT ---
+        // Null CPU-Last: Wir lesen den exakten Hertz-Wert direkt aus der LUT aus
+        // und wenden nur noch den thermischen Drift darauf an!
+        let baseCutoff = CUTOFF_LUT[cutoffReg];
+        
+        let thermalCoefficient = 1.0 - (this._temperature - 55.0) * 0.0035;
+        this.activeCutoff = baseCutoff * thermalCoefficient;
         
         if (this.activeCutoff < 30) this.activeCutoff = 30;
         if (this.activeCutoff > 16000) this.activeCutoff = 16000;
@@ -189,9 +192,6 @@ export class SIDChip {
     synthesizeVoiceOneCycle(v) {
         let ch = this.voices[v];
 
-        // --- ETAPPE 1: TEST Bit Fix ---
-        // Bit 3 resettet nichts. Es sperrt das Clocking. 
-        // Phasenakkumulator und LFSR frieren auf ihren aktuellen Werten ein.
         if ((ch.ctrl & 8) === 0) {
             let oldAcc = ch.phase;
             let newAcc = (ch.phase + ch.freq) & 0xFFFFFF;
@@ -220,21 +220,19 @@ export class SIDChip {
             ringMSB = (prevCh.phase >> 23) & 1;
         }
 
-        // Auslagern an das optimierte Bit-Logic Modul
         ch.waveOut8Bit = calculateWaveform8Bit(ch, ch.ctrl, ch.phase, ch.pw, ch.lfsr, ringMSB);
         ch.env8Bit = ch.envelope_counter;
 
-        // Bipolare Skalierung des DAC + DAC Bowing (Vorbereitet aus Phase 4)
-        let envNorm = ch.env8Bit / 255.0;
-        let waveNorm = ch.waveOut8Bit / 255.0;
-
-        let envDac = envNorm + 0.15 * envNorm * (1.0 - envNorm);
-        let waveDac = waveNorm + 0.1 * waveNorm * (1.0 - waveNorm);
+        // --- ETAPPE 2: 256-Entry DAC LUT ---
+        // Statt fehleranfälliger Mathematik holen wir uns die physikalischen,
+        // bitgewichteten Ausgangswerte direkt aus der generierten 6581 R-2R Leiter-Tabelle!
+        let envDac = DAC_LUT[ch.env8Bit];
+        let waveDac = DAC_LUT[ch.waveOut8Bit];
 
         let waveOutFloat = (waveDac * 2.0) - 1.0;
         return waveOutFloat * envDac;
     }
-
+    
     clock() {
         for (let v = 0; v < 3; v++) {
             this.clockEnvelopeOneCycle(v);
