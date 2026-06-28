@@ -1,4 +1,4 @@
-]633;E;find . -type f \\( -name '*.js' -o -name '*.json' -o -name '*.html' -o -name '*.css' \\);e3a1854f-b42e-4478-ae18-6561e24adca6]633;C===== ./css/style.css =====
+===== ./css/style.css =====
 /* =========================================
    1. GLOBALE VARIABLEN & THEMES
    ========================================= */
@@ -940,6 +940,14 @@ body.theme-atari .tab-btn.active {
         padding-bottom: 5px;
     }
 }
+
+/* Blendet den Cursor im Vollbildmodus bei Inaktivität aus */
+#visual-zone.no-cursor {
+    cursor: none !important;
+}
+#visual-zone.no-cursor * {
+    cursor: none !important;
+}
 ===== ./index.html =====
 <!DOCTYPE html>
 <html lang="de">
@@ -1096,7 +1104,8 @@ body.theme-atari .tab-btn.active {
 // =========================================================================
 
 import { trackRegistry } from '../tracks/registry.js';
-import { systemDescriptions, chipCheatSheets } from './content/museum.js'; 
+import { systemDescriptions } from './content/museum.js'; 
+import { chipCheatSheets } from './content/cheatsheets.js'; // --- NEU: Modularer Import ---
 import { workletRegistry } from './worklets/registry.js';
 import { initScroller } from './visuals/scroller.js'; 
 import { initVisuals } from './visuals/visualizer.js'; 
@@ -1126,8 +1135,25 @@ let lastTrackChangeTime = 0;
 let isEcoMode = false;      
 let isUserDragging = false; 
 let currentSubsongIndex = 1; 
-// Globales Array für die Kanallautstärken (Zero-Allocation)
 let channelVolumes = new Float32Array(4);
+
+// Cursor-Hiding Inaktivitäts-Timer
+let mouseIdleTimer = null;
+const visualZone = document.getElementById('visual-zone');
+
+function resetMouseIdleTimer() {
+    if (!visualZone) return;
+    visualZone.classList.remove('no-cursor');
+    clearTimeout(mouseIdleTimer);
+    
+    // Nur im Vollbild- oder Pseudo-Vollbildmodus den Zeiger ausblenden
+    const isFS = document.fullscreenElement || document.webkitFullscreenElement || visualZone.classList.contains('pseudo-fullscreen');
+    if (isFS) {
+        mouseIdleTimer = setTimeout(() => {
+            visualZone.classList.add('no-cursor');
+        }, 3000); // 3 Sekunden Inaktivität
+    }
+}
 
 function initApp() {
     if ('serviceWorker' in navigator) {
@@ -1165,7 +1191,7 @@ function initApp() {
         initVisuals({
             getEcoMode: () => isEcoMode,
             getCurrentOscValue: () => currentOscValue,
-            getChannelVolumes: () => channelVolumes, // === DIESEN GETTER HIER ERGÄNZEN ===
+            getChannelVolumes: () => channelVolumes,
             getTrackData: () => trackData,
             getAnalyserNode: getAnalyserNode,  
             getIsPlaying: () => isPlaying,
@@ -1184,13 +1210,19 @@ function initApp() {
         // INTERAKTIVE SKEUOMORPHIC LED KOPPLUNG (AMIGA)
         document.getElementById('chip-hud').addEventListener('click', (e) => {
             if (e.target && e.target.id === 'amiga-led-pwr') {
-                // Sendet den Umschalt-Zyklus (Auto -> Force ON -> Force OFF -> Auto) an das Worklet
                 const paulaNode = getPaulaNode();
                 if (paulaNode) {
                     paulaNode.port.postMessage({ type: 'CYCLE_FILTER' });
                 }
             }
         });
+
+        // Event-Listener für das Cursor-Hiding binden
+        if (visualZone) {
+            visualZone.addEventListener('mousemove', resetMouseIdleTimer);
+            visualZone.addEventListener('mousedown', resetMouseIdleTimer);
+            visualZone.addEventListener('touchstart', resetMouseIdleTimer);
+        }
 
         setTheme('theme-c64');
     });
@@ -1230,7 +1262,10 @@ progressSlider.addEventListener('input', (e) => {
 });
 
 progressSlider.addEventListener('change', (e) => {
-    if (trackData.length === 0) return;
+
+    // --- NEU: Generative C64 Programme können nicht per Slider gespult werden! ---
+    if (trackData.length === 0 || activeSystem === 'c64') return;
+
     const targetPercent = parseFloat(e.target.value);
     const targetFrame = Math.floor((targetPercent / 100) * trackData.length);
     
@@ -1265,54 +1300,36 @@ function handleWorkletMessage(e) {
         
         for (let i = 0; i < 32; i++) {
             currentChipRegs[i] = view[4 + i];
-            // === AUSLESEN DER EINZELNEN KANAL-LAUTSTÄRKEN FÜR RASTER-BARS ===
             channelVolumes[0] = view[34];
             channelVolumes[1] = view[35];
             channelVolumes[2] = view[36];
             channelVolumes[3] = view[37];            
         }
 
-        // === THERMISCHES FEEDBACK FÜR DEN SID-FILTER ===
         if (systemId === 0) {
             const tempVal = Math.round(view[33]);
-            currentChipRegs[29] = tempVal; // In virtuellem Register 29 parken für HUD
+            currentChipRegs[29] = tempVal; 
         }
 
-
-        // AUSSCHNITT 1: Der Klick-Event-Listener im boot-screen-Block (ca. Zeile 80)
-        document.getElementById('chip-hud').addEventListener('click', (e) => {
-            if (e.target && e.target.id === 'amiga-led-pwr') {
-                // Sendet den Umschalt-Zyklus (Auto -> Force ON -> Force OFF -> Auto) an das Worklet
-                const paulaNode = getPaulaNode();
-                if (paulaNode) {
-                    paulaNode.port.postMessage({ type: 'CYCLE_FILTER' });
-                }
-            }
-        });
-
-
-        // AUSSCHNITT 2: Der Message-Port-Receiver in handleWorkletMessage(e) (ca. Zeile 200)
         if (systemId === 1) {
             const ledState = Math.round(view[33]);
-            const overrideState = Math.round(view[38]); // Auslesen des 3-Stufen-Status (0: Auto, 1: Force ON, 2: Force OFF)
+            const overrideState = Math.round(view[38]); 
             currentChipRegs[29] = ledState; 
             currentChipRegs[30] = overrideState; 
             
             const pwrLed = document.getElementById('amiga-led-pwr');
             if (pwrLed) {
-                if (ledState === 0) { // Filter ist AUS -> LED leuchtet HELL!
+                if (ledState === 0) { 
                     pwrLed.classList.add('on');
                     pwrLed.style.background = '#ff0000';
                     pwrLed.style.boxShadow = '0 0 8px #ff0000';
-                } else { // Filter ist AN -> LED ist GEDIMMT!
+                } else { 
                     pwrLed.classList.remove('on');
                     pwrLed.style.background = '#440000';
                     pwrLed.style.boxShadow = 'none';
                 }
             }
 
-            // === DYNAMISCHES OVERRIDE LABEL UPDATE ===
-            // Schaltet sich vollautomatisch ab, wenn wir wieder im Auto-Modus (0) angekommen sind!
             const pwrLedOverride = document.getElementById('amiga-led-override');
             if (pwrLedOverride) {
                 pwrLedOverride.style.display = overrideState > 0 ? 'block' : 'none';
@@ -1349,7 +1366,8 @@ function handleWorkletMessage(e) {
         lastKnownFrame = e.data.frame || 0; 
         currentChipRegs = e.data.regs; 
     }
-    
+
+    // --- NEU RESTAURIERT: Globaler Digidrum-Trigger für die ST-Debugger LED ---
     if (e.data.type === 'DEBUG') {
         if (isEcoMode) return; 
 
@@ -1579,11 +1597,9 @@ async function selectAndPlayTrack(index, system) {
         resumeAudioContext().catch(e => console.log("AudioContext resume blockiert:", e));
     }
 
-    // === REPARIERT: Auslesen der Songliste des aktiven Systems ===
     const songs = trackRegistry[system]; 
     if (!songs || !songs[index]) return;
 
-    // === SOFORTIGER RESET DES OVERRIDE-LABELS BEI TRACKWECHSEL ===
     const pwrLedOverride = document.getElementById('amiga-led-override');
     if (pwrLedOverride) pwrLedOverride.style.display = 'none';
 
@@ -1602,6 +1618,9 @@ async function selectAndPlayTrack(index, system) {
     if (selectedSong.loadAsync) {
         const isAmigaSystem = (system === 'amiga');
         const isC64System = (system === 'c64');
+
+        // --- NEU: Progress-Slider für C64 Tracks aus Sicherheitsgründen sperren ---
+        document.getElementById('progress-slider').disabled = isC64System;
         
         currentScrollerText = isAmigaSystem 
             ? "+++ DOWNLOADING AND PARSING BINARY AMIGA MODULE... +++"
@@ -1703,6 +1722,7 @@ async function selectAndPlayTrack(index, system) {
                     <h2 style="color: var(--highlight-color);">&gt; NOW PLAYING:</h2>
                     <p style="font-size: 1.2em; padding-top: 5px;">${selectedSong.title}</p>
                 </div>
+                ${selectedSong.composerInfo ? `<div style="margin-bottom: 15px; line-height:1.6;">${selectedSong.composerInfo}</div>` : ''}
                 ${dynamicHTML}
                 <div style="margin-top: 30px; padding-top: 15px;">
                     ${systemText}
@@ -1916,7 +1936,6 @@ document.getElementById('core-selector').addEventListener('change', async (e) =>
     startPlayback(); 
 });
 
-// Kopplung des neuen, interaktiven analogen Temperaturreglers (Ohne Auto-Reset-Konflikt!)
 document.getElementById('temp-slider').addEventListener('input', (e) => {
     const tempVal = parseInt(e.target.value);
     document.getElementById('temp-display').innerText = `${tempVal}°C`;
@@ -2034,131 +2053,12 @@ export async function resumeAudioContext() {
         await audioCtx.resume();
     }
 }
-===== ./js/content/museum.js =====
-// === js/content/museum.js ===
+===== ./js/content/cheatsheets.js =====
+// === js/content/cheatsheets.js ===
 // ==========================================
-// DAS DIGITALE MUSEUM (Texte & Handbücher)
-// Mit integrierten Hardware-Spezifikations-Tabellen
+// RETRO HARDWARE REGISTERS CHEAT SHEETS
+// Quick Reference Guides for SID, YM, and Paula
 // ==========================================
-
-export const systemDescriptions = {
-c64: `
-        <!-- === TECHNICAL SPECIFICATION GRID (C64 SID 6581) === -->
-        <div style="border: 2px solid var(--text-color); padding: 8px 12px; margin-bottom: 20px; font-size: calc(var(--font-size-base) * 1.2); background: rgba(0,0,0,0.3); font-family: monospace;">
-            <p style="color: var(--highlight-color); margin-bottom: 8px; font-weight: bold; border-bottom: 1px dashed var(--text-color); padding-bottom: 4px;">>>> HARDWARE SPECIFICATIONS:</p>
-            <div style="display: grid; grid-template-columns: 140px 1fr; gap: 6px; line-height: 1.4;">
-                <div><strong>Kanäle:</strong></div><div>3 unabhängige Synthesestimmen + 1 routbares analoges VCF</div>
-                <div><strong>Taktfrequenz:</strong></div><div>985.248 Hz (PAL) / 1.022.727 Hz (NTSC)</div>
-                <div><strong>Wellenformen:</strong></div><div>Dreieck, Sägezahn, PWM, Rauschen (23-Bit LFSR), analoge Gatter-Mischungen</div>
-                <div><strong>Analog-Filter:</strong></div><div>12dB/Okt Multimode-Filter (LP/BP/HP/Notch) mit frei wählbarer Stimmen-Zuweisung</div>
-                <div><strong>Hüllkurven:</strong></div><div>3 x ADSR (15-Bit Rate-Counter, exponentielle Kondensator-Entladung)</div>
-                <div><strong>Sequenzierung:</strong></div><div>Freie 6502-Assembler-Player via PAL-VBLANK (50Hz) o. CIA-Timer</div>
-            </div>
-        </div>
-
-        <div style="border-left: 4px solid var(--text-color); padding: 10px 15px; margin-bottom: 15px; background: rgba(0,0,0,0.2); line-height: 1.6;">
-            <h3 style="color: var(--highlight-color); margin-bottom: 5px;">[ DEEP DIVE: MOS TECHNOLOGY SID 6581 ]</h3>
-            <p>Der Sound Interface Device (SID), 1981 von Bob Yannes entworfen, ist ein analoger subtraktiver Synthesizer auf einem einzigen Silizium-Chip. Er besitzt 3 Oszillatoren (Sägezahn, Dreieck, Rechteck, Rauschen), individuelle ADSR-Generatoren und ein analoges Multimode-Filter.</p>
-
-            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> DIE ANALOGE FILTER-ROUTING-MATRIX ($D417)</h4>
-            <p>Der SID besitzt auf dem Silizium genau einen physischen Filter-Schaltkreis (VCF). Coder konnten in Register <strong>$D417</strong> über einzelne Schalter (Bits) für jede der 3 Stimmen entscheiden, ob sie den Filter durchlaufen oder ihn umgehen (Bypass).<br>
-            <strong>🎵 Szene-Trick:</strong> Komponisten schickten oft nur die fette Bassline (Stimme 1) in den Filter, um sie per LFO "wabbeln" zu lassen, während die schnellen Arpeggios und Drums (Stimme 2 & 3) ungefiltert direkt zum Master-Out liefen, um kristallklar und aggressiv zu bleiben. (Tipp: Beobachte im HUD die LEDs unter <em>Routing (V1/V2/V3)</em>!)</p>
-
-            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> THERMAL CUTOFF DRIFT (DIE HITZE DES C64)</h4>
-            <p>Der analoge Filter des MOS 6581 war extrem temperaturempfindlich. Wenn der C64 lief, heizte sich der Chip im Gehäuse massiv auf, was den Widerstand der internen FET-Transistoren veränderte. Das Resultat: Die Grenzfrequenz (Cutoff) des Filters rutschte ab. Ein Track, den Rob Hubbard nach 5 Stunden an einem heißen Sommernachmittag perfekt und "cremig" abgemischt hatte, klang am nächsten Morgen im eiskalten Studio plötzlich viel zu schrill und beißend!</p>
-            <p style="margin-top: 5px;"><strong>Mit dem <em>TEMP</em>-Regler</strong> kannst du genau dieses Klima nun selbst steuern. Zieh ihn auf eiskalte <strong>15°C</strong> für brillante, aggressiv schneidende Höhen, oder auf glühende <strong>75°C</strong> für den legendären, warm-sättigenden und dumpfen Sound. Was damals der Albtraum für C64-Coder war, ist heute dein Spielplatz.</p>
-
-            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> DER HUBBARD'SCHE RAUSCH-ZUFALLS-HACK ($D41B)</h4>
-            <p>Rob Hubbard (Komponist von <em>Commando</em> und <em>Delta</em>) stand vor dem Problem, dass der C64 keinen mathematischen Zufallsgenerator besitzt, um dynamische Snare-Drums und Hi-Hats zu berechnen. Seine geniale Lösung: Er schaltete Oszillator 3 auf Rauschen und las in seiner Play-Routine kontinuierlich das Hardware-Register <strong>$D41B (Voice 3 Waveform Output)</strong> aus. Die fluktuierenden Rohdaten nutzte er direkt as Hardware-Zufallszahlen für seine peitschenden Percussions!</p>
-
-            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> DIE 3-STIMMEN-POLYPHONIE-FALLE (ARPEGGIOS)</h4>
-            <p>Da der SID nur über 3 Stimmen verfügt, mussten Musiker tricksen, um dreistimmige Akkorde plus Bass und Melodie abzubilden. Sie koppelten die Akkord-Noten (z. B. Grundton, kleine Terz, Quinte) in einer schnellen 50Hz-VBLANK-Routine auf einer einzigen Stimme. Durch das rasant schnelle Umschalten der Frequenz entsteht das berühmte "Flirren" (Arpeggio), das dem menschlichen Ohr einen echten, dreistimmigen Akkord vorgaukelt.</p>
-
-            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> DER GALWAY VOLUME-ECHO-HACK ($D418)</h4>
-            <p>Martin Galway (Komponist von <em>Wizball</em>) fand heraus, dass man den SID zwingen kann, digitale Samples (PCM) abzuspielen, indem man das globale Lautstärkeregister <strong>$D418</strong> mit einer Frequenz von mehreren Kilohertz beschreibt. Dieser Hardware-Hack modulierte die DC-Spannung des Chips so schnell, dass ein hörbarer digitaler 4-Bit Soundstrom entstand.</p>
-
-            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> DYNAMISCHE PULSWEITENMODULATION (PWM)</h4>
-            <p>Um dünne Synth-Klänge extrem "fett" und schwebend klingen zu lassen, modulierten Coder die Rechteckbreite (Pulse Width) über sinusförmige Software-LFOs. Das erzeugte ein sattes chorusschwebendes Klangbild, das klingt, als spielten mehrere Oszillatoren gleichzeitig.</p>
-        </div>
-    `,
-   amiga: `
-        <!-- === TECHNICAL SPECIFICATION GRID (AMIGA MOS PAULA 8364) === -->
-        <div style="padding: 4px 0; margin-bottom: 20px; font-size: calc(var(--font-size-base) * 0.85); background: transparent; font-family: monospace;">
-            <p style="color: var(--highlight-color); margin-bottom: 12px; font-weight: bold; padding-bottom: 4px;">>>> HARDWARE SPECIFICATIONS:</p>
-            <div style="display: grid; grid-template-columns: 140px 1fr; gap: 6px; line-height: 1.4;">
-                <div><strong>Kanäle:</strong></div><div>4 x ungeteilte DMA-PCM-Kanäle (festes Panning: 2 Links, 2 Rechts)</div>
-                <div><strong>Taktfrequenz:</strong></div><div>3.546.895 Hz (PAL Master Clock / 3.55 MHz)</div>
-                <div><strong>Audioauflösung:</strong></div><div>8-Bit signed PCM (multipliziert mit 6-Bit Vol zu 14-Bit Äquivalenzauflösung)</div>
-                <div><strong>Analog-Filter:</strong></div><div>6dB/Okt statischer Lowpass (4.42kHz) + 12dB/Okt LED-Butterworth (3.09kHz)</div>
-                <div><strong>Hüllkurven:</strong></div><div>Software-gesteuert (prozedural berechnet durch den Tracker-Sequenzer)</div>
-                <div><strong>Sequenzierung:</strong></div><div>ProTracker (MOD) o. FastTracker (XM) Patterns via CIA-A-BPM-Timer</div>
-            </div>
-        </div>
-
-        <div style="border-left: 4px solid var(--text-color); padding: 10px 15px; margin-bottom: 15px; background: rgba(0,0,0,0.2); line-height: 1.6;">
-            <h3 style="color: var(--highlight-color); margin-bottom: 5px;">[ CHIP-SPECS: MOS PAULA 8364 (AMIGA 500) ]</h3>
-            <p>Paula war ein reiner DMA-Sample-Player, der 4 unabhängige PCM-Kanäle direkt aus dem Chip-RAM auslas. Um den typischen "Amiga 500 Sound" exakt nachzubilden, emuliert dieser Standard-Core drei hardware-spezifische Bausteine:</p>
-
-            <!-- NEU: Exakte, tiefgründige Erklärung der variablen D/A-Wandlungsrate hier im Haupt-Deep-Dive! -->
-            <h4 style="color: var(--highlight-color); margin: 15px 0 5px 0;">> DIE VARIABLE D/A-WANDLUNGSRATE (DER AMIGA-SCHIMMER)</h4>
-            <p>Paula arbeitet im Gegensatz zu modernen Soundkarten nicht mit einer starren, globalen Samplerate (wie 44.1 kHz oder 48 kHz). Jeder der 4 Kanäle liest sein Sample mit einer völlig eigenständigen Hardware-Geschwindigkeit aus!<br>
-            Diese Rate wird direkt aus dem PAL-Haupttakt (3.546.895 Hz) geteilt durch den im Register hinterlegten Periodenwert berechnet. Dieses variable Auslesen erzeugt im Hochtonbereich die berühmten analogen Spiegelfrequenzen (Aliasing) – den legendären <strong>Amiga-Schimmer</strong>, der Tracker-Musik diesen unverwechselbar lebendigen Glanz verleiht.</p>
-
-            <h4 style="color: var(--highlight-color); margin: 15px 0 5px 0;">> BIT-GENAUE DAC-MULTIPLIKATION</h4>
-            <p>Das D/A-Wandler-System multipliziert das vorzeichenbehaftete 8-Bit-Sample in Echtzeit mit dem 6-Bit-Lautstärkeregister (0-64). Das resultiert in einer 14-Bit Digitalauflösung mit dem berühmt-berüchtigten, erdigen "Crunch" und metallischen Spiegelfrequenzen (Aliasing) im Hochtonbereich.</p>
-
-            <h4 style="color: var(--highlight-color); margin: 15px 0 5px 0;">> STATISCHER ANALOG-FILTER (6 dB/oct)</h4>
-            <p>Ein permanenter Tiefpass-Filter (RC-Schaltung), der im originalen Amiga 500 bei genau <strong>4.420,97 Hz</strong> einsetzt, um hochfrequentes Digitalrauschen sachte abzufedern.</p>
-
-            <h4 style="color: var(--highlight-color); margin: 15px 0 5px 0;">> DYNAMISCHER LED-FILTER (12 dB/oct)</h4>
-            <p>Ein zuschaltbarer Butterworth-Filter 2. Ordnung bei genau <strong>3.090,53 Hz</strong> ($Q = 0,660$). Er wurde im Original durch das CIA-Register gesteuert (welches auch die Helligkeit der Power-LED dimmte), um den Ton besonders warm und dumpf klingen zu lassen.</p>
-        </div>
-    `,
-    atari: `
-        <!-- === TECHNICAL SPECIFICATION GRID (ATARI YM2149F) === -->
-        <div style="padding: 4px 0; margin-bottom: 20px; font-size: calc(var(--font-size-base) * 0.75); background: transparent; font-family: monospace;">
-            <p style="color: var(--highlight-color); margin-bottom: 8px; font-weight: bold; border-bottom: 1px dashed var(--text-color); padding-bottom: 4px;">>>> HARDWARE SPECIFICATIONS:</p>
-            <div style="display: grid; grid-template-columns: 140px 1fr; gap: 6px; line-height: 1.4;">
-                <div><strong>Kanäle:</strong></div><div>3 analoge Hauptkanäle (A, B, C) mit zuschaltbarem Rauschen (kein 4. Kanal)</div>
-                <div><strong>Taktfrequenz:</strong></div><div>2.000.000 Hz (2.0 MHz Master Clock)</div>
-                <div><strong>Wellenformen:</strong></div><div>Rechteck (Kanal A/B/C), Rauschen (zuschaltbar), Ton+Rausch-Mix, 4-Bit Digidrums</div>
-                <div><strong>Analog-Filter:</strong></div><div>Keine (Klangformung erfolgt rein digital über programmierbare Teiler)</div>
-                <div><strong>Hüllkurven:</strong></div><div>1 x Hardware-Envelope (HEG) mit 16 vordefinierten Shapes (Sägezahn, Dreieck)</div>
-                <div><strong>Sequenzierung:</strong></div><div>Register-Dump-Logging (YM3b/YM5/YM6) via 50Hz-VBLANK o. MFP-Interrupts</div>
-            </div>
-        </div>
-
-        <div style="border-left: 4px solid var(--text-color); padding: 10px 15px; margin-bottom: 15px; background: rgba(0,0,0,0.2); line-height: 1.6;">
-            <h3 style="color: var(--highlight-color); margin-bottom: 15px;">[ DEEP DIVE: YM2149F ARCHITEKTUR ]</h3>
-            <p>Der Yamaha YM2149 (im Atari ST mit 2 MHz getaktet) ist ein puristischer Rechteck-Synthesizer. Er hat keine analogen Filter, aber eine geniale, rohe digitale Architektur. Hier erfährst du, was die Live-Werte im DSP-Analyzer (oben rechts) bedeuten:</p>
-
-            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> DIE OSZILLATOREN (CH A, B, C)</h4>
-            <p>Drei reine Rechteckwellen. Die Tonhöhe (Pitch) wird über einen 12-Bit Timer gesteuert. <em>Vorsicht, Counter-Logic:</em> Es ist ein Teiler-Wert! Je kleiner die Zahl im Register, desto höher der Ton (Hertz = Takt / (16 * Period)).</p>
-
-            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> DER NOISE-GENERATOR (N-FREQ)</h4>
-            <p>Ein 5-Bit Linear Feedback Shift Register (LFSR), das pseudozufälliges "weißes Rauschen" generiert. Die Frequenz bestimmt, wie "hell" oder "dumpf" das Rauschen klingt.<br>
-            <strong>🎵 Szene-Trick:</strong> Musiker änderten die Noise-Frequenz rasend schnell, um aus dem statischen Rauschen knackige Snare-Drums und zischende Hi-Hats zu formen.</p>
-
-            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> DER MIXER (TONE & NOISE)</h4>
-            <p>Das logische Herz des Chips. Für jeden der 3 Kanäle kann man Rechteckwelle (Tone) und Rauschen (Noise) separat ein- oder ausschalten.<br>
-            <strong>🎵 Szene-Trick:</strong> Legt man auf einen Kanal Tone UND Noise gleichzeitig, entsteht ein rauer, metallischer Klang – perfekt für elektronische Percussion.</p>
-
-            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> HARDWARE ENVELOPE GENERATOR (HEG)</h4>
-            <p>Eigentlich gedacht, die Lautstärke ohne CPU-Last zu formen (16 feste Shapes). Ein Kanal nutzt den HEG, wenn die <strong>HEG-LED</strong> im HUD leuchtet.<br>
-            <strong>💡 Der Hippel-Hack:</strong> Jochen Hippel setzte die HEG-Frequenz so extrem hoch an, dass die Hüllkurve selbst hörbar wurde! Er nutzte die wilden HEG-Shapes, um die menschliche Stimme ("Tha-li-on" Intro) zu simulieren.</p>
-
-            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> YM6 SPEC: DIE DIGIDRUMS (DIGI HACK)</h4>
-            <p>Hardwareseitig besitzt der YM2149 **keine** D/A-Wandler für PCM-Sprachsamples oder Trommeln. ST-Coder behalfen sich mit hochfrequenten CPU-Software-Timern (wie dem MFP 68901), um die 4-Bit-Lautstärkeregister (R8, R9, R10) direkt im Kilohertz-Bereich mit analogen Pegeln zu beschreiben.</p>
-            <p style="margin-top: 5px;"><strong>Das Format-Geheimnis von Arnaud Carré (Leonard):</strong> Um diese emulierten Trommel-Hits platzsparend im datei-komprimierten <code>.ym</code>-Registerdump zu hinterlegen, erfand er ein geniales Meta-Protokoll für das <strong>YM6-Format</strong>. Da die oberen Bits der Pitch-Feinabstimmungsregister (R1 und R3) physisch ungenutzt sind, codierte er dort die Trigger!</p>
-            <p style="font-size: 0.9em; margin-left: 10px; color: var(--text-color); opacity: 0.8;">
-                &gt; <strong>Bit 6-7 von R1 oder R3 = 01:</strong> Signaliert unserer Engine einen aktiven Digidrum-Start!<br>
-                &gt; <strong>Bit 4-5 von R1 oder R3:</strong> Bestimmt, welcher Kanal (01: Voice A, 10: Voice B, 11: Voice C) gehijackt wird.<br>
-                &gt; Das zugehörige Volume-Register (R8, R9 oder R10) transportiert in diesem Frame anstelle der Lautstärke die 5-Bit ID des eingebetteten PCM-Trommelsamples.<br>
-                &gt; Unsere Engine fängt diesen Hardware-Hack ab, startet das Sample, leitet die emulierten Trigger-Infos an die rote <strong>Global-Trig-LED</strong> im HUD weiter und schreibt die Sample-Nummer live in die Zeile <strong>Digi Hack</strong> des betroffenen Kanals!
-            </p>
-        </div>
-    `
-};
 
 export const chipCheatSheets = {
     atari: `
@@ -2192,6 +2092,133 @@ export const chipCheatSheets = {
         Die rote <span style="color:#fff">Power-LED (PWR)</span> ist interaktiv! Klicke direkt darauf, um das analoge 12dB/Okt-Tiefpass-Filter (LED-Filter) manuell zu überbrücken (gedimmt/on = warmer, weicher Sound; hell/off = klarer, höhenreicher Sound).
     `
 };
+===== ./js/content/museum.js =====
+// === js/content/museum.js ===
+// ==========================================
+// DAS DIGITALE MUSEUM (Texte & Handbücher)
+// Mit integrierten Hardware-Spezifikations-Tabellen
+// ==========================================
+
+export const systemDescriptions = {
+c64: `
+        <!-- === TECHNICAL SPECIFICATION GRID (C64 SID 6581) === -->
+        <div style="border: 2px solid var(--text-color); padding: 8px 12px; margin-bottom: 20px; font-size: calc(var(--font-size-base) * 1.2); background: rgba(0,0,0,0.3); font-family: monospace;">
+            <p style="color: var(--highlight-color); margin-bottom: 8px; font-weight: bold; border-bottom: 1px dashed var(--text-color); padding-bottom: 4px;">>>> HARDWARE SPECIFICATIONS:</p>
+            <div style="display: grid; grid-template-columns: 140px 1fr; gap: 6px; line-height: 1.4;">
+                <div><strong>Kanäle:</strong></div><div>3 unabhängige Synthesestimmen + 1 routbares analoges VCF</div>
+                <div><strong>Taktfrequenz:</strong></div><div>985.248 Hz (PAL) / 1.022.727 Hz (NTSC)</div>
+                <div><strong>Wellenformen:</strong></div><div>Dreieck, Sägezahn, PWM, Rauschen (23-Bit LFSR), analoge Gatter-Mischungen</div>
+                <div><strong>Analog-Filter:</strong></div><div>12dB/Okt Multimode-Filter (LP/BP/HP/Notch) mit frei wählbarer Stimmen-Zuweisung</div>
+                <div><strong>Hüllkurven:</strong></div><div>3 x ADSR (15-Bit Rate-Counter, exponentielle Kondensator-Entladung)</div>
+                <div><strong>Sequenzierung:</strong></div><div>Freie 6502-Assembler-Player via PAL-VBLANK (50Hz) o. CIA-Timer</div>
+            </div>
+        </div>
+
+        <div style="border-left: 4px solid var(--text-color); padding: 10px 15px; margin-bottom: 15px; background: rgba(0,0,0,0.2); line-height: 1.6;">
+            <h3 style="color: var(--highlight-color); margin-bottom: 15px;">[ DEEP DIVE: MOS TECHNOLOGY SID 6581 ]</h3>
+            <p>Der Sound Interface Device (SID), 1981 von Bob Yannes entworfen, ist ein analoger subtraktiver Synthesizer auf einem einzigen Silizium-Chip. Er besitzt 3 Oszillatoren (Sägezahn, Dreieck, Rechteck, Rauschen), individuelle ADSR-Generatoren und ein analoges Multimode-Filter.</p>
+
+            <h4 style="color: var(--highlight-color); margin: 25px 0 5px 0;">> HISTORIE: DER 24-JÄHRIGE REBELL & DAS JUBILÄUM DES SIDS</h4>
+            <p>In der zweiten Hälfte des Jahres 1981 stand der erst 24-jährige Robert "Bob" Yannes vor einer monumentalen Aufgabe. Commodore-Gründer Jack Tramiel gab der Halbleiter-Sparte MOS Technology ein knallhartes Ultimatum: Der Sound- und Grafikchip für das geplante "Project Red" (den späteren Commodore 64) musste in genau <strong>fünf Monaten</strong> fertig sein, um pünktlich zur Consumer Electronics Show (CES) im Januar 1982 präsentiert werden zu können.</p>
+            <p>Yannes, der kurz zuvor als junger Absolvent eingestellt worden war, verabscheute die damals typischen simplen Soundchips der Spielhallen-Ära (die er als "primitive Beep-Generatoren" bezeichnete). Da er in seiner Freizeit hobbymäßig eigene Synthesizer gebaut hatte, beschloss er, das Unmögliche zu wagen: Er wollte einen vollwertigen, professionellen subtraktiven Synthesizer auf ein winziges Stück Silizium bannen. Unter extremem Zeitdruck entwarf er ein revolutionäres Design mit drei physisch getrennten Stimmen, flexiblen ADSR-Hüllkurven und einem echten analogen Multimode-Filter.</p>
+
+            <h4 style="color: var(--highlight-color); margin: 25px 0 5px 0;">> DIE ANOMALIEN: WARUM DER SID SCHWER ZU EMULIEREN IST</h4>
+            <p>Die unerreichte Seele des SID-Klangs liegt in seinen physikalischen "Fehlern" und analogen Imperfektionen begründet. Das ist auch der Grund, weshalb einfache Emulationen oft steril und flach klingen. Unser cycle-genauer Mischer bildet diese Anomalien präzise ab:</p>
+            <ul>
+                <li><strong>NMOS Transistor Sättigung:</strong> Wenn Musiker mehrere Wellenformen auf einem Kanal mischten (z. B. Dreieck + Sägezahn), war dies kein logisches digitales ODER. Die analogen Signalströme belasteten sich auf dem Silizium physisch gegenseitig, was zu nicht-linearen harmonischen Verzerrungen (Sättigung) führte.</li>
+                <li><strong>DC-Leakage & der Galway-Hack ($D418):</strong> Die analoge VCA-Lautstärkeregelung hatte ein leichtes Gleichspannungs-Leck. Martin Galway (Komponist von <em>Wizball</em>) fand heraus, dass man dieses Leck ausnutzen konnte: Durch blitzschnelles Beschreiben des Lautstärkeregisters mit mehreren Kilohertz erzeugte die CPU eine hörbare DC-Spannungsschwankung – der berühmte 4-Bit-Sample-Hack war geboren, den unser neuer 1-MHz-Mischer detailgetreu wiedergibt.</li>
+                <li><strong>Thermal Cutoff Drift:</strong> Der analoge Filter besaß keine Temperaturkompensation. Wenn sich der Rechner im Betrieb erwärmte, sank der Widerstand der internen FET-Transistoren, wodurch die Filter-Grenzfrequenz (Cutoff) dramatisch abrutschte. Ein Track, der nachmittags im heißen Studio warm klang, klang morgens eisig und schrill. (Dies lässt sich über unseren <em>TEMP</em>-Regler manuell nachstellen).</li>
+            </ul>
+
+            <h4 style="color: var(--highlight-color); margin: 25px 0 5px 0;">> DIE ANALOGE FILTER-ROUTING-MATRIX ($D417)</h4>
+            <p>Der SID besitzt auf dem Silizium genau einen physischen Filter-Schaltkreis (VCF). Coder konnten in Register <strong>$D417</strong> über einzelne Schalter (Bits) für jede der 3 Stimmen entscheiden, ob sie den Filter durchlaufen oder ihn umgehen (Bypass).<br>
+            <strong>🎵 Szene-Trick:</strong> Komponisten schickten oft nur die fette Bassline (Stimme 1) in den Filter, um sie per LFO "wabbeln" zu lassen, während die schnellen Arpeggios und Drums (Stimme 2 & 3) ungefiltert direkt zum Master-Out liefen, um kristallklar und aggressiv zu bleiben. (Tipp: Beobachte im HUD die LEDs unter <em>Routing (V1/V2/V3)</em>!)</p>
+
+            <h4 style="color: var(--highlight-color); margin: 25px 0 5px 0;">> DIE 3-STIMMEN-POLYPHONIE-FALLE (ARPEGGIOS)</h4>
+            <p>Da der SID nur über 3 Stimmen verfügt, mussten Musiker tricksen, um dreistimmige Akkorde plus Bass und Melodie abzubilden. Sie koppelten die Akkord-Noten (z. B. Grundton, kleine Terz, Quinte) in einer schnellen 50Hz-VBLANK-Routine auf einer einzigen Stimme. Durch das rasant schnelle Umschalten der Frequenz entsteht das berühmte "Flirren" (Arpeggio), das dem menschlichen Ohr einen echten, dreistimmigen Akkord vorgaukelt.</p>
+
+            <h4 style="color: var(--highlight-color); margin: 25px 0 5px 0;">> DYNAMISCHE PULSWEITENMODULATION (PWM)</h4>
+            <p>Um dünne Synth-Klänge extrem "fett" und schwebend klingen zu lassen, modulierten Coder die Rechteckbreite (Pulse Width) über sinusförmige Software-LFOs. Das erzeugte ein sattes chorusschwebendes Klangbild, das klingt, als spielten mehrere Oszillatoren gleichzeitig.</p>
+        </div>
+    `,
+   amiga: `
+        <!-- === TECHNICAL SPECIFICATION GRID (AMIGA MOS PAULA 8364) === -->
+        <div style="padding: 4px 0; margin-bottom: 20px; font-size: calc(var(--font-size-base) * 0.85); background: transparent; font-family: monospace;">
+            <p style="color: var(--highlight-color); margin-bottom: 12px; font-weight: bold; padding-bottom: 4px;">>>> HARDWARE SPECIFICATIONS:</p>
+            <div style="display: grid; grid-template-columns: 140px 1fr; gap: 6px; line-height: 1.4;">
+                <div><strong>Kanäle:</strong></div><div>4 x ungeteilte DMA-PCM-Kanäle (festes Panning: 2 Links, 2 Rechts)</div>
+                <div><strong>Taktfrequenz:</strong></div><div>3.546.895 Hz (PAL Master Clock / 3.55 MHz)</div>
+                <div><strong>Audioauflösung:</strong></div><div>8-Bit signed PCM (multipliziert mit 6-Bit Vol zu 14-Bit Äquivalenzauflösung)</div>
+                <div><strong>Analog-Filter:</strong></div><div>6dB/Okt statischer Lowpass (4.42kHz) + 12dB/Okt LED-Butterworth (3.09kHz)</div>
+                <div><strong>Hüllkurven:</strong></div><div>Software-gesteuert (prozedural berechnet durch den Tracker-Sequenzer)</div>
+                <div><strong>Sequenzierung:</strong></div><div>ProTracker (MOD) o. FastTracker (XM) Patterns via CIA-A-BPM-Timer</div>
+            </div>
+        </div>
+
+        <div style="border-left: 4px solid var(--text-color); padding: 10px 15px; margin-bottom: 15px; background: rgba(0,0,0,0.2); line-height: 1.6;">
+            <h3 style="color: var(--highlight-color); margin-bottom: 15px;">[ DEEP DIVE: MOS TECHNOLOGY PAULA 8364 ]</h3>
+            <p>Paula war das Herzstück des Amiga-Audiosystems und einer der fortschrittlichsten Soundchips seiner Epoche.</p>
+
+            <h4 style="color: var(--highlight-color); margin: 25px 0 5px 0;">> HISTORIE: JAY MINERS MENTORSHIP & GLENN KELLERS ERSTER CHIP</h4>
+            <p>In der frühen Entwicklungsphase der Amiga-Lorraine-Prototypen trug die Paula noch einen ganz anderen Namen: Sie hieß intern <strong>Portia</strong> (abgeleitet von I/O "Ports"). Da der Custom-Chip neben der Tonausgabe auch für die Steuerung der Diskettenlaufwerke und der seriellen Schnittstelle zuständig war, lag dieser logische Name nah. Später bildeten die Ingenieure um Jay Miner daraus die alliterativen, freundlicheren Codenamen Agnus, Denise und schließlich <strong>Paula</strong>.</p>
+            <p>Die Schaltung von Paula wurde vom jungen Ingenieur <strong>Glenn Keller</strong> entworfen, der von Amiga-Urvater Jay Miner persönlich als Mentor betreut wurde. Faszinierend dabei: Paula war Glenn Kellers **allerliebstes und erstes-Chip-Design überhaupt**! Und er lieferte ein absolutes Meisterwerk ab. Während der Amiga im Laufe der Jahre technologisch weiterentwickelt wurde und Agnus (Fat Agnus, Alice) sowie Denise (Lisa) mehrfach komplett neu designt wurden, blieb Paula über die gesamte Lebensspanne des Amiga von 1985 (Amiga 1000) bis zum Ende 1992 (Amiga 4000 / CD32) **völlig unverändert**. Sie war von Tag eins an schlicht fehlerfrei und perfekt ausgelegt.</p>
+
+            <h3 style="color: var(--highlight-color); margin: 30px 0 15px 0;">[ CHIP-SPECS: EMULIERTE HARDWARE-KOMPONENTEN ]</h3>
+            <p>Paula war ein reiner DMA-Sample-Player, der 4 unabhängige PCM-Kanäle direkt aus dem Chip-RAM auslas. Um den typischen "Amiga 500 Sound" exakt nachzubilden, emuliert dieser Standard-Core vier hardware-spezifische Bausteine:</p>
+
+            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> DIE VARIABLE D/A-WANDLUNGSRATE (DER AMIGA-SCHIMMER)</h4>
+            <p>Paula arbeitet im Gegensatz zu modernen Soundkarten nicht mit einer starren, globalen Samplerate (wie 44.1 kHz oder 48 kHz). Jeder der 4 Kanäle liest sein Sample mit einer völlig eigenständigen Hardware-Geschwindigkeit aus!<br>
+            Diese Rate wird direkt aus dem PAL-Haupttakt (3.546.895 Hz) geteilt durch den im Register hinterlegten Periodenwert berechnet. Dieses variable Auslesen erzeugt im Hochtonbereich die berühmten analogen Spiegelfrequenzen (Aliasing) – den legendären <strong>Amiga-Schimmer</strong>, der Tracker-Musik diesen unverwechselbar lebendigen Glanz verleiht.</p>
+
+            <h4 style="color: var(--highlight-color); margin: 15px 0 5px 0;">> BIT-GENAUE DAC-MULTIPLIKATION</h4>
+            <p>Das D/A-Wandler-System multipliziert das vorzeichenbehaftete 8-Bit-Sample in Echtzeit mit dem 6-Bit-Lautstärkeregister (0-64). Das resultiert in einer 14-Bit Digitalauflösung mit dem berühmt-berüchtigten, erdigen "Crunch" und metallischen Spiegelfrequenzen (Aliasing) im Hochtonbereich.</p>
+
+            <h4 style="color: var(--highlight-color); margin: 15px 0 5px 0;">> STATISCHER ANALOG-FILTER (6 dB/oct)</h4>
+            <p>Ein permanente Tiefpass-Filter (RC-Schaltung), der im originalen Amiga 500 bei genau <strong>4.420,97 Hz</strong> einsetzt, um hochfrequentes Digitalrauschen sachte abzufedern.</p>
+
+            <h4 style="color: var(--highlight-color); margin: 15px 0 5px 0;">> DYNAMISCHER LED-FILTER (12 dB/oct)</h4>
+            <p>Ein zuschaltbarer Butterworth-Filter 2. Ordnung bei genau <strong>3.090,53 Hz</strong> ($Q = 0,660$). Er wurde im Original durch das CIA-Register gesteuert (welches auch die Helligkeit der Power-LED dimmte), um den Ton besonders warm und dumpf klingen zu lassen.</p>
+        </div>
+    `,
+    atari: `
+        <!-- === TECHNICAL SPECIFICATION GRID (ATARI YM2149F) === -->
+        <div style="padding: 4px 0; margin-bottom: 20px; font-size: calc(var(--font-size-base) * 0.75); background: transparent; font-family: monospace;">
+            <p style="color: var(--highlight-color); margin-bottom: 8px; bold; border-bottom: 1px dashed var(--text-color); padding-bottom: 4px;">>>> HARDWARE SPECIFICATIONS:</p>
+            <div style="display: grid; grid-template-columns: 140px 1fr; gap: 6px; line-height: 1.4;">
+                <div><strong>Kanäle:</strong></div><div>3 analoge Hauptkanäle (A, B, C) mit zuschaltbarem Rauschen (kein 4. Kanal)</div>
+                <div><strong>Taktfrequenz:</strong></div><div>2.000.000 Hz (2.0 MHz Master Clock)</div>
+                <div><strong>Wellenformen:</strong></div><div>Rechteck (Kanal A/B/C), Rauschen (zuschaltbar), Ton+Rausch-Mix, 4-Bit Digidrums</div>
+                <div><strong>Analog-Filter:</strong></div><div>Keine (Klangformung erfolgt rein digital über programmierbare Teiler)</div>
+                <div><strong>Hüllkurven:</strong></div><div>1 x Hardware-Envelope (HEG) mit 16 vordefinierten Shapes (Sägezahn, Dreieck)</div>
+                <div><strong>Sequenzierung:</strong></div><div>Register-Dump-Logging (YM3b/YM5/YM6) via 50Hz-VBLANK o. MFP-Interrupts</div>
+            </div>
+        </div>
+
+        <div style="border-left: 4px solid var(--text-color); padding: 10px 15px; margin-bottom: 15px; background: rgba(0,0,0,0.2); line-height: 1.6;">
+            <h3 style="color: var(--highlight-color); margin-bottom: 15px;">[ DEEP DIVE: YAMAHA YM2149 (ATARI ST) ]</h3>
+            <p>Der Yamaha YM2149 war der akustische Herzschlag der 16-Bit Atari ST Serie – ein scheinbar primitiver Chip mit einer spektakulären Entwicklungsgeschichte.</p>
+
+            <h4 style="color: var(--highlight-color); margin: 25px 0 5px 0;">> HISTORIE: SHIRAZ SHIVJIS COST-CUT-HACK & DIE RETTUNG DES 'JACKINTOSH'</h4>
+            <p>Als Jack Tramiel Commodore im Streit verließ und 1984 die Reste von Atari kaufte, beauftragte er seinen genialen Chefdesigner <strong>Shiraz Shivji</strong> (der zuvor am C64 mitgearbeitet hatte), in weniger als einem Jahr einen extrem günstigen Macintosh-Killer (den "Atari ST") zu entwerfen. Jedes Bauteil musste auf den Cent genau kalkuliert werden. Um den Preis für teure dedizierte I/O-Controller-Chips zu sparen, vollbrachte Shivji einen legendären Hacker-Trick: Er wählte den spottbilligen Yamaha YM2149 (einen optimierten Lizenzbau des 1978er AY-3-8910 von General Instrument) und <strong>missbrauchte dessen freie I/O-Ports als System-Rückgrat</strong>.</p>
+            <p>Auf dem Atari ST steuert der Soundchip deshalb nicht nur Töne, sondern über seine physischen Pins (I/O Port A) direkt: Die Laufwerksauswahl des Diskettenlaufwerks (Drive A/B Select, Side Select), das Strobe-Signal für den Druckerport, die Steuerleitungen für das RS-232-Modem sowie die Selektionssignale für die MIDI- und Tastatur-Controller! Ein Ausfall des Soundchips führte somit zum sofortigen Stillstand des gesamten Computers.</p>
+
+            <h3 style="color: var(--highlight-color); margin: 30px 0 15px 0;">[ CHIP-SPECS: EMULIERTE HARDWARE-KOMPONENTEN & SCENE-TRICKS ]</h3>
+            <p>Der YM2149 besitzt keinerlei analoge Filter oder native PCM-Sample-Wandler. Um dem Chip dennoch komplexe Klänge zu entlocken, mussten die Musik-Magier der ST-Demoszene tief in die Trickkiste greifen. Unsere Synthese-Cores emulieren diese Hardware-Kniffe detailgetreu:</p>
+
+            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> DIE OSZILLATOREN (CH A, B, C)</h4>
+            <p>Drei reine, harsche Rechteck-Generatoren. Die Frequenzsteuerung erfolgt über einen 12-Bit-Teilerwert. Je kleiner der Registerwert, desto schneller schwingt die Phase. (Tipp: Beobachte im HUD die Sparklines im Live-Oszillogramm pro Kanal!)</p>
+
+            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> DER NOISE-GENERATOR (N-FREQ)</h4>
+            <p>Ein 5-Bit Linear Feedback Shift Register (LFSR), das pseudozufälliges "weißes Rauschen" erzeugt. Durch rasant schnelles Umschalten der Noise-Frequenz emulierten Coder knackige Snare-Drums und zischende Hi-Hats, die im Mischer flexibel auf die 3 Spuren geroutet werden konnten.</p>
+
+            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> HARDWARE ENVELOPE GENERATOR (HEG) & DER HIPPEL-SID-HACK</h4>
+            <p>Der Chip besitzt eigentlich nur eine einzige, starre Hüllkurve (HEG) mit 16 vordefinierten Mustern. <strong>Jochen Hippel (Mad Max)</strong> fand jedoch heraus: Wenn man die HEG-Frequenz über Software-Timer extrem hochreißt (in den hörbaren Bereich), fängt die Hüllkurve selbst an zu schwingen. Koppelmen wir diesen "Hippel-Hack" mit den Rechteck-Generatoren, entstehen resonante, synthetische Dreieckswellen – die berühmten "ST-SID-Voices", die im HUD das rote <em>HEG-LED</em> zum Leuchten bringen.</p>
+
+            <h4 style="color: var(--highlight-color); margin: 20px 0 5px 0;">> YM6 SPEC: DIE DIGIDRUMS (DIGI HACK)</h4>
+            <p>Da der YM2149 keine D/A-Wandler besitzt, nutzten Coder wie **Arnaud Carré (Leonard)** hochfrequente CPU-Timer-Interrupts, um die 4-Bit-Lautstärkeregister im Kilohertz-Bereich direkt mit Sample-Amplituden zu füttern (Pulse Code Modulation). Das von uns emulierte **YM6-Format** fängt diese Register-Hacks ab, leitet sie an die rote <em>Global-Trig-LED</em> im HUD weiter und rendert die legendären 4-Bit-Trommelschläge glasklar im Stereo-Raum.</p>
+        </div>
+    `
+};
 ===== ./js/content/songlengths.js =====
 // === js/content/songlengths.js ===
 // =========================================================
@@ -2200,52 +2227,28 @@ export const chipCheatSheets = {
 // =========================================================
 
 export const SID_SLDB = {
-    "commando": {
-        lengths: [188, 10, 10]
-    },
-    "montyontherun": {
-        lengths: [351, 146, 10]
-    },
-    "delta": {
-        lengths: [306, 10, 10]
-    },
-    "wizball": {
-        lengths: [625, 163, 10]
-    },
-    "greatgianasisters": {
-        lengths: [215, 146, 111, 131, 161, 13, 93, 47]
-    },
-    "tobeontoppsid": {
-        lengths: [340, 120, 10]
-    },
-    "rambofirstbloodpartii": {
-        lengths: [192, 10, 10]
-    },
-    "megaapocalypsepsid": {
-        lengths: [332, 10, 10]
-    },
-    "bioniccommando": {
-        lengths: [127, 215, 378]
-    },
-    "lastninja": {
-        lengths: [332, 231, 168]
-    },
-    // === NEU: OFFIZIELLE SLDB-LAUFZEITEN (IN SEKUNDEN) ===
-    "miamivice": {
-        lengths: [69] // Jan Hammer Theme (Martin Galway Cover)
-    },
-    "wayofthetiger": {
-        lengths: [170, 48, 32, 12, 15, 15, 15, 15, 15, 15, 15] // Ben Daglish (11 Subsongs)
-    },
-    "platoon": {
-        lengths: [317] // Jonathan Dunn Title-Theme
-    },
-    "compilationi": {
-        lengths: [311, 230, 215, 342] // Chris Hülsbeck (Elladita, Time, Old Imagines, Trioly)
-    },
-    "compilationii": {
-        lengths: [482, 180, 240, 150] // Chris Hülsbeck
-    }
+    "commando": { lengths: [188, 10, 10] },
+    "montyontherun": { lengths: [351, 146, 10] },
+    "delta": { lengths: [306, 10, 10] },
+    "wizball": { lengths: [625, 163, 10] },
+    "greatgianasisters": { lengths: [215, 146, 111, 131, 161, 13, 93, 47] },
+    "greatgianasisterspsid": { lengths: [215, 146, 111, 131, 161, 13, 93, 47] },
+    "tobeontoppsid": { lengths: [340, 120, 10] },
+    "rambofirstbloodpartii": { lengths: [192, 10, 10] },
+    "megaapocalypsepsid": { lengths: [332, 10, 10] },
+    "bioniccommando": { lengths: [127, 215, 378] },
+    "lastninja": { lengths: [332, 231, 168] },
+    "miamivice": { lengths: [69] },
+    "wayofthetiger": { lengths: [170, 48, 32, 12, 15, 15, 15, 15, 15, 15, 15] },
+    "platoon": { lengths: [317] },
+    "compilationi": { lengths: [311, 230, 215, 342] },
+    "compilationii": { lengths: [482, 180, 240, 150] },
+    
+    // --- NEU: Jeroen Tel / Maniacs of Noise ---
+    "cybernoidii": { lengths: [378, 10, 10] },
+    "supremacy": { lengths: [316, 210, 180, 120] },
+    "robocop3": { lengths: [185, 120, 105, 165, 110] },
+    "myth": { lengths: [282, 120, 120, 120, 120] }
 };
 ===== ./js/parsers/hipc-parser.js =====
 // ==========================================
@@ -2666,7 +2669,7 @@ function readString(data, offset, maxLength) {
 // === js/parsers/xm-parser.js ===
 // ==========================================
 // FASTTRACKER II (.XM) COMPACT BINARY PARSER
-// With High-Performance Int8Array Chip RAM Allocation
+// With Default Sample Panning & Volume Column Panning Support
 // ==========================================
 
 export async function loadXmFile(url) {
@@ -2691,18 +2694,15 @@ export async function loadXmFile(url) {
     let numPatterns = view.getUint16(70, true);
     let numInstruments = view.getUint16(72, true);
     
+    let flags = view.getUint16(74, true);
+    let linearFreq = (flags & 1) === 1;
+    
     let defaultSpeed = view.getUint16(76, true); 
     let defaultTempo = view.getUint16(78, true);
     
     let orderTable = new Uint8Array(songLength);
     for(let i=0; i<songLength; i++) orderTable[i] = data[80 + i];
 
-    const amigaPeriods = new Float32Array(97);
-    for(let n=1; n<=96; n++) {
-        amigaPeriods[n] = 428.0 * Math.pow(2.0, (37 - n) / 12.0);
-    }
-
-    // 1. PATTERNS ZUERST PARSEN
     let offset = 60 + headerSize;
     let patterns = [];
 
@@ -2738,6 +2738,9 @@ export async function loadXmFile(url) {
                 let volVal = 0xFF; 
                 if (vol >= 0x10 && vol <= 0x50) {
                     volVal = vol - 0x10;
+                } else if (vol >= 0xC0 && vol <= 0xCF) {
+                    // --- NEU: Volume Column Panning (0xC0 - 0xCF) durchlassen! ---
+                    volVal = vol; 
                 }
                 
                 cellBuffer[dst]     = note & 0xFF;
@@ -2757,7 +2760,6 @@ export async function loadXmFile(url) {
         offset += patHeaderLen + packedSize;
     }
 
-    // 2. INSTRUMENTE & DELTA-SAMPLES ERST DANACH PARSEN
     let samples = {};
     let loadedSamplesCount = 0;
 
@@ -2778,6 +2780,8 @@ export async function loadXmFile(url) {
                     vol: view.getUint8(shOffset+12),
                     finetune: view.getInt8(shOffset+13),
                     type: view.getUint8(shOffset+14),
+                    // --- NEU: Sample Default Panning aus Byte 15 parsen ---
+                    pan: view.getUint8(shOffset+15), 
                     relNote: view.getInt8(shOffset+16),
                 });
                 shOffset += sampleHeaderSize;
@@ -2788,23 +2792,25 @@ export async function loadXmFile(url) {
                 let sh = sampleHeaders[s];
                 if (sh.length > 0) {
                     let is16Bit = (sh.type & 16) !== 0;
-                    let isLoop = (sh.type & 3) !== 0;
                     
-                    // === NATIVE 8-BIT CHIP RAM SPEICHERUNG (Int8Array) ===
-                    let byteData = new Int8Array(is16Bit ? sh.length/2 : sh.length);
+                    let loopType = sh.type & 3; 
+                    let isLoop = loopType !== 0;
+                    let isPingPong = loopType === 2;
+
+                    let rawLength = is16Bit ? sh.length / 2 : sh.length;
+                    let byteData = new Int8Array(rawLength);
                     let old = 0;
                     
                     if (is16Bit) {
-                        for(let j=0; j<sh.length/2; j++) {
+                        for(let j=0; j<rawLength; j++) {
                             let v = view.getInt16(sDataOffset, true);
                             sDataOffset += 2;
                             old = (old + v) & 0xFFFF;
                             let signed = old < 32768 ? old : old - 65536;
-                            // 16-Bit wird für Paula bitgenau auf 8-Bit quantisiert!
                             byteData[j] = Math.round(signed / 256.0);
                         }
                     } else {
-                        for(let j=0; j<sh.length; j++) {
+                        for(let j=0; j<rawLength; j++) {
                             let v = view.getInt8(sDataOffset);
                             sDataOffset += 1;
                             old = (old + v) & 0xFF;
@@ -2813,12 +2819,31 @@ export async function loadXmFile(url) {
                         }
                     }
                     
+                    let finalData = byteData;
+                    let lStart = is16Bit ? sh.loopStart / 2 : sh.loopStart;
+                    let lLen = isLoop ? (is16Bit ? sh.loopLen / 2 : sh.loopLen) : 0;
+
+                    if (isPingPong && lLen > 0) {
+                        let unrolled = new Int8Array(lStart + lLen * 2);
+                        for (let j = 0; j < lStart + lLen; j++) {
+                            if (j < byteData.length) unrolled[j] = byteData[j];
+                        }
+                        for (let j = 0; j < lLen; j++) {
+                            let srcIdx = lStart + lLen - 1 - j;
+                            if (srcIdx < byteData.length) unrolled[lStart + lLen + j] = byteData[srcIdx];
+                        }
+                        finalData = unrolled;
+                        lLen = lLen * 2; 
+                    }
+
                     samples[`xm_sample_${i}`] = {
-                        data: byteData,
-                        loopStart: is16Bit ? sh.loopStart/2 : sh.loopStart,
-                        loopLen: isLoop ? (is16Bit ? sh.loopLen/2 : sh.loopLen) : 0,
+                        data: finalData,
+                        loopStart: lStart,
+                        loopLen: lLen,
                         baseVolume: sh.vol,
-                        relNote: sh.relNote
+                        relNote: sh.relNote,
+                        finetune: sh.finetune,
+                        pan: sh.pan // --- NEU: Panning-Wert an Worklet weitergeben ---
                     };
                     loadedSamplesCount++;
                 }
@@ -2835,6 +2860,7 @@ export async function loadXmFile(url) {
     return {
         isSequenced: true,
         type: 'XM',
+        linearFreq: linearFreq,
         songLength: songLength,
         orderTable: orderTable,
         patterns: patterns,
@@ -3582,7 +3608,7 @@ export function initScroller(getScrollerText, getEcoMode) {
 // === js/visuals/visualizer.js ===
 // =========================================================
 // HIGH-PERFORMANCE RETROWAVE VISUALIZER MODULE
-// Dynamic 3/4 Channel-Coupled Copperbars & Spectrum Analyzer
+// Optimized Phosphor Trail, Clean Copperbars & Fullscreen Clamping
 // =========================================================
 
 export function initVisuals(stateGetters, callbacks) {
@@ -3599,10 +3625,26 @@ export function initVisuals(stateGetters, callbacks) {
     let oscIndex = 0;
 
     function resizeCanvas() {
-        const newWidth = canvas.clientWidth;
-        const newHeight = canvas.clientHeight;
+        const clientWidth = canvas.clientWidth;
+        const clientHeight = canvas.clientHeight;
         
-        if (canvas.width !== newWidth) {
+        // --- RETRO-RESOLUTION CLAMPING ---
+        // Um ein "Schmelzen" der GPU auf 4K/Retina-Displays zu verhindern und
+        // die Frequenz-Geschwindigkeit des Oszilloskops auf allen Bildschirmen
+        // absolut einheitlich zu halten, deckeln wir die maximale interne 
+        // Renderbreite auf 1280px (720p). Das heraufskalierte CSS-Bild erzeugt
+        // einen herrlich authentischen Röhren-Unschärfe-Look!
+        const maxResolutionWidth = 1280;
+        let scale = 1.0;
+        
+        if (clientWidth > maxResolutionWidth) {
+            scale = maxResolutionWidth / clientWidth;
+        }
+        
+        const newWidth = Math.floor(clientWidth * scale);
+        const newHeight = Math.floor(clientHeight * scale);
+        
+        if (canvas.width !== newWidth || canvas.height !== newHeight) {
             const oldHistory = oscHistory;
             const oldLen = oldHistory ? oldHistory.length : 0;
             
@@ -3620,8 +3662,6 @@ export function initVisuals(stateGetters, callbacks) {
                 }
                 oscIndex = copyLen % historyLength;
             }
-        } else {
-            canvas.height = newHeight; 
         }
     }
     
@@ -3631,21 +3671,47 @@ export function initVisuals(stateGetters, callbacks) {
     const startTime = performance.now();
     let hudCounter = 0; 
 
-    const activeAnalyser = stateGetters.getAnalyserNode();
-    const bufferLength = activeAnalyser ? activeAnalyser.frequencyBinCount : 512;
-    const dataArray = new Uint8Array(bufferLength);
     const barCount = 48; 
     const peaks = new Array(barCount).fill(0); 
 
-    function drawCopperBar(yCenter, thickness, color1, color2) {
-        const grad = ctx.createLinearGradient(0, yCenter - thickness, 0, yCenter + thickness);
-        grad.addColorStop(0, `rgba(0,0,0,0)`); 
-        grad.addColorStop(0.2, color1);
-        grad.addColorStop(0.5, `rgba(255,255,255,1)`); 
-        grad.addColorStop(0.8, color2);
-        grad.addColorStop(1, `rgba(0,0,0,0)`);
-        ctx.fillStyle = grad; 
-        ctx.fillRect(0, yCenter - thickness, canvas.width, thickness * 2);
+    function drawReticle() {
+        const w = canvas.width;
+        const h = canvas.height;
+        const midY = h / 2;
+        
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        
+        ctx.beginPath();
+        ctx.moveTo(0, midY);
+        ctx.lineTo(w, midY);
+        ctx.stroke();
+        
+        const divisions = 10;
+        const stepX = w / divisions;
+        ctx.beginPath();
+        for (let i = 1; i < divisions; i++) {
+            ctx.moveTo(i * stepX, 0);
+            ctx.lineTo(i * stepX, h);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]); 
+    }
+
+    function drawCopperbar(y, height, volume, colorStart, colorEnd) {
+        if (volume <= 0.01) return;
+        const w = canvas.width;
+        
+        const grad = ctx.createLinearGradient(0, y, 0, y + height);
+        grad.addColorStop(0.0, '#000000');
+        grad.addColorStop(0.18, colorStart);
+        grad.addColorStop(0.5, '#ffffff'); 
+        grad.addColorStop(0.82, colorEnd);
+        grad.addColorStop(1.0, '#000000');
+        
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, y, w, height);
     }
 
     function draw() {
@@ -3657,65 +3723,61 @@ export function initVisuals(stateGetters, callbacks) {
 
         const t = (performance.now() - startTime) * 0.001; 
         
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.4)'; 
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.38)'; 
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         
         const isAmiga = document.body.classList.contains('theme-amiga');
         const isAtari = document.body.classList.contains('theme-atari');
-        
-        const pal1 = isAtari ? ['#005500', '#00aa00'] : isAmiga ? ['#0000aa', '#0055ff'] : ['#352879', '#6c5eb5'];
-        const pal2 = isAtari ? ['#555500', '#aaaa00'] : isAmiga ? ['#aa5500', '#ff8800'] : ['#aa0055', '#ff00aa'];
-        const pal3 = isAtari ? ['#005555', '#00aaaa'] : isAmiga ? ['#5500aa', '#aa00ff'] : ['#555555', '#aaaaaa'];
         const lineColor = isAtari ? '#55ff55' : isAmiga ? '#ff8800' : '#6c5eb5';
+        
+        drawReticle();
 
-        // === DOPPELTE KANALKOPPLUNG FÜR COPPERBARS ===
         const channelVolumes = stateGetters.getChannelVolumes ? stateGetters.getChannelVolumes() : [0, 0, 0, 0];
         const numBars = isAmiga ? 4 : 3;
 
         const pals = [
-            isAtari ? ['#005500', '#00aa00'] : isAmiga ? ['#0000aa', '#0055ff'] : ['#352879', '#6c5eb5'],
-            isAtari ? ['#555500', '#aaaa00'] : isAmiga ? ['#aa5500', '#ff8800'] : ['#aa0055', '#ff00aa'],
-            isAtari ? ['#005555', '#00aaaa'] : isAmiga ? ['#5500aa', '#aa00ff'] : ['#555555', '#aaaaaa'],
-            isAmiga ? ['#555555', '#ffffff'] : []
+            isAtari ? ['#003300', '#00aa00'] : isAmiga ? ['#000066', '#0055ff'] : ['#201a60', '#6c5eb5'],
+            isAtari ? ['#333300', '#aaaa00'] : isAmiga ? ['#663300', '#ff8800'] : ['#660033', '#ff00aa'],
+            isAtari ? ['#003333', '#00aaaa'] : isAmiga ? ['#330066', '#aa00ff'] : ['#333333', '#aaaaaa'],
+            isAmiga ? ['#111111', '#888888'] : []
         ];
 
-        const sinTimes = [1.2, 1.8, 1.5, 2.1];
+        const sinTimes = [1.3, 1.9, 1.6, 2.2];
         const sinOffsets = [0.0, 2.0, 4.0, 1.5];
-        
-        // === FEINERE, FILIGRANERE BASISDICKEN FÜR REINERE OPTIK ===
-        const baseThickness = [14, 10, 8, 6]; 
-        const heightWeights = [0.3, 0.35, 0.25, 0.28];
+        const baseThickness = [18, 14, 12, 10]; 
+        const heightWeights = [0.28, 0.33, 0.22, 0.25];
 
         ctx.globalCompositeOperation = "screen"; 
         for (let c = 0; c < numBars; c++) {
             let vol = channelVolumes[c] || 0;
-            
-            // Reduzierter Punch (Ausschlag) verhindert das unschöne Verschmelzen der Linien
-            let punch = vol * 18; 
+            let punch = vol * 28; 
             
             let yCenter = (canvas.height / 2) + Math.sin(t * sinTimes[c] + sinOffsets[c]) * (canvas.height * heightWeights[c]);
-            drawCopperBar(yCenter, baseThickness[c] + punch, pals[c][0], pals[c][1]);
+            drawCopperbar(yCenter - (baseThickness[c] + punch)/2, (baseThickness[c] + punch), vol, pals[c][0], pals[c][1]);
         }
         ctx.globalCompositeOperation = "source-over";
 
-        // --- DAS OSZILLOSKOP ---
         const currentOscValue = stateGetters.getCurrentOscValue();
         const trackData = stateGetters.getTrackData();
         const trackLength = trackData ? (trackData.length || 0) : 0;
         
-        oscHistory[oscIndex] = (trackLength === 0) ? NaN : currentOscValue;
+        oscHistory[oscIndex] = (trackLength === 0) ? 0 : currentOscValue;
         oscIndex = (oscIndex + 1) % historyLength; 
-        
+
         ctx.beginPath();
+        ctx.lineWidth = 2.5;
         ctx.strokeStyle = lineColor;
         
+        ctx.shadowColor = lineColor;
+        ctx.shadowBlur = 10;
+
         let isFirstPoint = true;
         for (let x = 0; x < historyLength; x++) {
             const actualIndex = (oscIndex + x) % historyLength; 
             const val = oscHistory[actualIndex];
             
             if (!isNaN(val)) {
-                const y = (canvas.height / 2) - (val * (canvas.height * 0.4)); 
+                const y = (canvas.height / 2) - (val * (canvas.height * 0.42)); 
                 if (isFirstPoint) {
                     ctx.moveTo(x, y);
                     isFirstPoint = false;
@@ -3726,17 +3788,19 @@ export function initVisuals(stateGetters, callbacks) {
         }
         
         if (!isFirstPoint) {
-            ctx.lineWidth = 6; ctx.globalAlpha = 0.3; ctx.stroke();
-            ctx.lineWidth = 2; ctx.globalAlpha = 1.0; ctx.stroke();
+            ctx.stroke();
         }
+        ctx.shadowBlur = 0; 
 
-        // --- SPECTRUM ANALYZER ---
         const activeAnalyser = stateGetters.getAnalyserNode();
         const isPlaying = stateGetters.getIsPlaying();
         const audioCtx = stateGetters.getAudioContext();
 
         if (activeAnalyser && isPlaying && audioCtx) {
+            const bufferLength = activeAnalyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
             activeAnalyser.getByteFrequencyData(dataArray);
+            
             const barWidth = (canvas.width / barCount) - 2;
             let x = 0;
             
@@ -3755,20 +3819,20 @@ export function initVisuals(stateGetters, callbacks) {
                 for (let b = startBin; b < endBin; b++) sum += dataArray[b];
                 const avg = sum / (endBin - startBin);
                 
-                const heightBoost = 1.0 + (i / barCount) * 0.5;
-                const barHeight = ((avg * heightBoost) / 255.0) * (canvas.height * 0.4);
+                const heightBoost = 1.0 + (i / barCount) * 0.6;
+                const barHeight = ((avg * heightBoost) / 255.0) * (canvas.height * 0.38);
                 
                 if (barHeight > peaks[i]) peaks[i] = barHeight; 
-                else { peaks[i] -= 1.5; if (peaks[i] < 0) peaks[i] = 0; }
+                else { peaks[i] -= 1.2; if (peaks[i] < 0) peaks[i] = 0; }
                 
                 ctx.fillStyle = lineColor; 
-                ctx.globalAlpha = 0.7;
+                ctx.globalAlpha = 0.6;
                 ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
                 
                 if (peaks[i] > 2) {
                     ctx.globalAlpha = 1.0; 
                     ctx.fillStyle = '#ffffff';
-                    ctx.fillRect(x, canvas.height - peaks[i] - 4, barWidth, 2);
+                    ctx.fillRect(x, canvas.height - peaks[i] - 3, barWidth, 2);
                 }
                 x += barWidth + 2;
             }
@@ -3783,11 +3847,11 @@ export function initVisuals(stateGetters, callbacks) {
     
     draw();
 }
-===== ./js/worklets/amiga/paula-worklet.js =====
-// === js/worklets/amiga/paula-worklet.js ===
+===== ./js/worklets/amiga/paula-exact.js =====
+// === js/worklets/amiga/paula-exact.js ===
 // ==========================================
 // MOS TECHNOLOGY PAULA 8364 CHIP EMULATION
-// With 3-State Hardware Filter Cycle (Auto -> Force ON -> Force OFF -> Auto)
+// Analog Dirt Edition: With Full Stereo Width & Volume Column Panning
 // ==========================================
 
 class StaticRCFilter {
@@ -3839,6 +3903,28 @@ class PaulaChannel {
         this.repLength = 0; 
         this.phase = 0;     
         this.activeSample = 1; 
+        
+        this.targetPeriod = 0;
+        this.basePeriod = 428;
+        this.currentNote = 0;
+        this.targetNote = 0;
+        
+        this.portamentoSpeed = 0;
+        this.portamentoUpSpeed = 0;
+        this.portamentoDownSpeed = 0;
+        this.volSlideSpeed = 0;
+        this.sampleOffset = 0;
+        
+        this.pan = 0.5;
+        this.vibratoSpeed = 0;
+        this.vibratoDepth = 0;
+        this.vibratoPhase = 0;
+        this.hasVibrato = false;
+        
+        this.lastPlayedSample = 0;
+        
+        this.patternLoopRow = 0;
+        this.patternLoopCount = 0;
     }
 
     trigger(data, loopStart, loopLen) {
@@ -3847,13 +3933,8 @@ class PaulaChannel {
         this.phase = 0;
         
         if (loopLen > 2) {
-            if (loopStart >= data.length) {
-                loopStart = 0;
-            }
-            if (loopStart + loopLen > data.length) {
-                loopLen = data.length - loopStart;
-            }
-
+            if (loopStart >= data.length) loopStart = 0;
+            if (loopStart + loopLen > data.length) loopLen = data.length - loopStart;
             this.length = loopStart + loopLen;
             this.repPointer = loopStart;
             this.repLength = loopLen;
@@ -3909,12 +3990,12 @@ class PaulaProcessor extends AudioWorkletProcessor {
         
         this.samples = {}; 
         this.isPlaying = false;
-
         this.visualView = new Float32Array(40);
 
-        // Sequenzer Engine Variablen
         this.isSequenced = false;
         this.seqType = 'MOD';
+        this.linearFreq = false;
+        
         this.songLength = 0;
         this.orderTable = null;
         this.patterns = null;
@@ -3926,15 +4007,21 @@ class PaulaProcessor extends AudioWorkletProcessor {
         this.currentRow = 0;
         this.currentTick = 0;
         this.samplesUntilNextTick = 0;
+        
+        this.patternDelay = 0;
+        this.breakPending = false;
+        this.breakOrder = 0;
+        this.breakRow = 0;
 
         this.staticL = new StaticRCFilter(sampleRate);
         this.staticR = new StaticRCFilter(sampleRate);
         this.ledL = new AmigaLEDFilter(sampleRate);
         this.ledR = new AmigaLEDFilter(sampleRate);
         this.ledFilterOn = true; 
-        
-        // === NEU: 3-STUFIGER FILTER STATUS-WERTE (0 = Auto, 1 = Force ON, 2 = Force OFF) ===
         this.filterModeState = 0; 
+        
+        this.hsyncPhase = 0;
+        this.vblankPhase = 0;
 
         this.port.onmessage = (e) => {
             const msg = e.data;
@@ -3943,6 +4030,9 @@ class PaulaProcessor extends AudioWorkletProcessor {
                     this.samples[msg.name] = msg.data;
                 }
             } else if (msg.type === 'PLAY_TRACK') {
+                const isXM = msg.track && msg.track.type === 'XM';
+                this.linearFreq = msg.track ? (msg.track.linearFreq || false) : false;
+                
                 for (let i = 0; i < 64; i++) {
                     this.channels[i].data = null;
                     this.channels[i].vol = 0;
@@ -3953,9 +4043,34 @@ class PaulaProcessor extends AudioWorkletProcessor {
                     this.channels[i].repLength = 0;
                     this.channels[i].phase = 0;
                     this.channels[i].activeSample = 1;
+                    
+                    this.channels[i].targetPeriod = 0;
+                    this.channels[i].basePeriod = 428;
+                    this.channels[i].currentNote = 0;
+                    this.channels[i].targetNote = 0;
+                    
+                    this.channels[i].portamentoSpeed = 0;
+                    this.channels[i].portamentoUpSpeed = 0;
+                    this.channels[i].portamentoDownSpeed = 0;
+                    this.channels[i].volSlideSpeed = 0;
+                    this.channels[i].sampleOffset = 0;
+                    
+                    this.channels[i].patternLoopRow = 0;
+                    this.channels[i].patternLoopCount = 0;
+                    
+                    this.channels[i].lastPlayedSample = 0;
+                    
+                    if (isXM) this.channels[i].pan = 0.5;
+                    else {
+                        const panMod = i % 4;
+                        this.channels[i].pan = (panMod === 0 || panMod === 3) ? 0.0 : 1.0;
+                    }
+                    this.channels[i].vibratoSpeed = 0;
+                    this.channels[i].vibratoDepth = 0;
+                    this.channels[i].vibratoPhase = 0;
+                    this.channels[i].hasVibrato = false;
                 }
 
-                // Bei jedem neuen Track den Modus zurück auf AUTO stellen
                 this.filterModeState = 0;
 
                 if (msg.track && msg.track.isSequenced) {
@@ -3972,6 +4087,8 @@ class PaulaProcessor extends AudioWorkletProcessor {
                     this.currentRow = 0;
                     this.currentTick = 0;
                     this.samplesUntilNextTick = 0;
+                    this.patternDelay = 0;
+                    this.breakPending = false;
                     this.isPlaying = true;
                 } else {
                     this.isSequenced = false;
@@ -3998,22 +4115,20 @@ class PaulaProcessor extends AudioWorkletProcessor {
                     this.currentOrder = targetOrder % this.songLength;
                     this.currentRow = Math.floor(remainingTicks / this.speed) % 64;
                     this.currentTick = remainingTicks % this.speed;
+                    this.patternDelay = 0;
+                    this.breakPending = false;
                 } else {
                     if (this.trackData) this.currentFrame = msg.frame % this.trackData.length;
                 }
             } else if (msg.type === 'CYCLE_FILTER') {
-                // === ROTATION DES ZYKLUSBEFEHLS (Auto -> Force ON -> Force OFF -> Auto) ===
                 this.filterModeState = (this.filterModeState + 1) % 3;
-                if (this.filterModeState === 1) {
-                    this.ledFilterOn = true;  // Force ON (LED wird gedimmt)
-                } else if (this.filterModeState === 2) {
-                    this.ledFilterOn = false; // Force OFF (LED wird hell)
-                }
+                if (this.filterModeState === 1) this.ledFilterOn = true; 
+                else if (this.filterModeState === 2) this.ledFilterOn = false; 
             }
         };
     }
 
-    processTrackerTick() {
+    processTrackerTick(overshoot) {
         if (this.currentOrder >= this.songLength) {
             this.currentOrder = 0; 
         }
@@ -4024,10 +4139,7 @@ class PaulaProcessor extends AudioWorkletProcessor {
 
         const pattern = patternObj.data;
         const numRows = patternObj.numRows;
-
         const rowOffset = this.currentRow * this.numChannels * 6;
-
-        const overshoot = -this.samplesUntilNextTick; 
         const clockTicksPerSample = this.clock / sampleRate;
 
         for (let ch = 0; ch < this.numChannels; ch++) {
@@ -4039,117 +4151,284 @@ class PaulaProcessor extends AudioWorkletProcessor {
             const param = pattern[cellOffset + 5];
 
             const channel = this.channels[ch];
-
+            
             if (sample > 0) {
                 channel.activeSample = sample;
             }
+            
             const activeSample = channel.activeSample || 1;
             const smpName = this.seqType === 'MOD' ? `mod_sample_${activeSample}` : `xm_sample_${activeSample}`;
             const currentSmpObj = this.samples[smpName];
 
+            const isSampleChange = (sample > 0 && sample !== channel.lastPlayedSample);
+            const isPortamento = (effect === 0x03 || effect === 0x05) && (channel.data !== null) && 
+                                 (this.seqType === 'XM' ? true : !isSampleChange);
+
             if (this.currentTick === 0) {
-                if (sample > 0 && currentSmpObj && currentSmpObj.data) {
-                    channel.trigger(currentSmpObj.data, currentSmpObj.loopStart, currentSmpObj.loopLen);
-                    channel.vol = currentSmpObj.baseVolume; 
-                    channel.pointer = overshoot * (clockTicksPerSample / channel.per);
+                const hasNote = (period > 0 && period !== 97);
+                if (period === 97) channel.vol = 0;
+
+                if (hasNote) {
+                    let calculatedPeriod = period;
+                    let actualNote = 0;
+
+                    if (this.seqType === 'XM') {
+                        const relNote = currentSmpObj ? (currentSmpObj.relNote || 0) : 0;
+                        const finetune = currentSmpObj ? (currentSmpObj.finetune || 0) : 0;
+                        actualNote = period + relNote + (finetune / 128.0);
+                        const clampedNote = Math.min(96, Math.max(1, actualNote));
+                        calculatedPeriod = Math.round(428.0 * Math.pow(2.0, (49 - clampedNote) / 12.0));
+                    }
+
+                    if (isPortamento) {
+                        channel.targetPeriod = calculatedPeriod;
+                        channel.targetNote = actualNote;
+                    } else {
+                        channel.per = calculatedPeriod;
+                        channel.basePeriod = calculatedPeriod;
+                        channel.targetPeriod = 0;
+                        channel.currentNote = actualNote;
+                        channel.targetNote = 0;
+                    }
                 }
 
-                if (period > 0) {
-                    if (this.seqType === 'MOD') {
-                        channel.per = period;
-                    } else { 
-                        if (period === 0xFFFF || period === 97) {
-                            channel.vol = 0; 
-                        } else {
-                            const relNote = currentSmpObj ? (currentSmpObj.relNote || 0) : 0;
-                            const actualNote = period + relNote;
-                            const clampedNote = Math.min(96, Math.max(1, actualNote));
-                            channel.per = Math.round(428.0 * Math.pow(2.0, (37 - clampedNote) / 12.0));
+                if (hasNote && currentSmpObj && currentSmpObj.data) {
+                    if (!isPortamento) {
+                        channel.trigger(currentSmpObj.data, currentSmpObj.loopStart, currentSmpObj.loopLen);
+                        channel.phase = overshoot * (clockTicksPerSample / channel.per);
+                        
+                        if (effect === 0x09) {
+                            if (param > 0) channel.sampleOffset = param * 256;
+                            channel.pointer = channel.sampleOffset;
                         }
                     }
-                    if (period !== 0xFFFF && period !== 97) {
-                        channel.phase = overshoot * (clockTicksPerSample / channel.per);
+                    if (sample > 0) {
+                        channel.lastPlayedSample = sample;
+                    }
+                }
+
+                // --- Panning & Volume Übernahmen ---
+                if (sample > 0 && currentSmpObj) {
+                    channel.vol = currentSmpObj.baseVolume; 
+                    // NEU: Sample Default Panning (0-255)
+                    if (currentSmpObj.pan !== undefined) {
+                        channel.pan = currentSmpObj.pan / 255.0;
                     }
                 }
 
                 if (volume !== 0xFF) {
-                    channel.vol = volume; 
+                    if (volume >= 0xC0 && volume <= 0xCF) {
+                        // NEU: Volume Column Panning (C0 - CF = Pan 0 - 15)
+                        channel.pan = (volume - 0xC0) / 15.0;
+                    } else if (volume <= 64) {
+                        channel.vol = volume; 
+                    }
                 }
 
+                if (effect !== 0x04 && effect !== 0x06) {
+                    channel.hasVibrato = false;
+                }
+
+                // --- TICK 0: EFFECTS ---
                 switch (effect) {
+                    case 0x01: if (param > 0) channel.portamentoUpSpeed = param; break;
+                    case 0x02: if (param > 0) channel.portamentoDownSpeed = param; break;
+                    case 0x03: if (param > 0) channel.portamentoSpeed = param; break;
+                    case 0x04: 
+                        if (param > 0) {
+                            if ((param >> 4) > 0) channel.vibratoSpeed = (param >> 4) & 0x0F;
+                            if ((param & 0x0F) > 0) channel.vibratoDepth = param & 0x0F;
+                        }
+                        channel.hasVibrato = true;
+                        break;
+                    case 0x05:
+                    case 0x0A: 
+                        if (param > 0) channel.volSlideSpeed = param; 
+                        break;
+                    case 0x06: 
+                        if (param > 0) channel.volSlideSpeed = param;
+                        channel.hasVibrato = true;
+                        break;
+                    case 0x08: 
+                        channel.pan = param / 255.0;
+                        break;
                     case 0x0C: 
                         channel.vol = param > 64 ? 64 : param;
                         break;
                     case 0x0F: 
                         if (param > 0) {
-                            if (param < 32) {
-                                this.speed = param;
-                            } else {
-                                this.bpm = param;
-                            }
+                            if (param < 32) this.speed = param;
+                            else this.bpm = param;
                         }
                         break;
                     case 0x0B: 
-                        this.currentOrder = param;
-                        this.currentRow = 0;
-                        this.currentTick = -1; 
+                        this.breakOrder = param;
+                        this.breakRow = 0;
+                        this.breakPending = true;
                         break;
                     case 0x0D: 
-                        const targetRow = ((param >> 4) * 10) + (param & 0x0F);
-                        this.currentRow = targetRow < numRows ? targetRow : 0;
-                        this.currentOrder++;
-                        this.currentTick = -1;
+                        this.breakOrder = this.currentOrder + 1;
+                        this.breakRow = ((param >> 4) * 10) + (param & 0x0F);
+                        this.breakPending = true;
                         break;
+                        
                     case 0x0E:
-                        if ((param & 0xF0) === 0x00) { 
-                            // === DEKODIERUNG NUR AUSFÜHREN, WENN WIR IM AUTO MODUS (0) SIND! ===
-                            if (this.filterModeState === 0) {
-                                this.ledFilterOn = (param & 0x0F) === 0; 
+                        const subEffect = param >> 4;
+                        const subParam = param & 0x0F;
+                        if (subEffect === 0x00) { 
+                            if (this.filterModeState === 0) this.ledFilterOn = (subParam === 0); 
+                        } else if (subEffect === 0x08) { 
+                            // --- NEU: E8x (Set 4-Bit Panning) ---
+                            channel.pan = subParam / 15.0;
+                        } else if (subEffect === 0x0A) { 
+                            channel.vol = Math.min(64, channel.vol + subParam);
+                        } else if (subEffect === 0x0B) { 
+                            channel.vol = Math.max(0, channel.vol - subParam);
+                        } else if (subEffect === 0x01) { 
+                            if (this.seqType === 'XM' && this.linearFreq) {
+                                channel.currentNote = Math.min(96, channel.currentNote + (subParam / 16.0));
+                                channel.per = Math.round(428.0 * Math.pow(2.0, (49 - channel.currentNote) / 12.0));
+                            } else if (channel.per > 0) {
+                                channel.per = Math.max(113, channel.per - subParam);
+                            }
+                        } else if (subEffect === 0x02) { 
+                            if (this.seqType === 'XM' && this.linearFreq) {
+                                channel.currentNote = Math.max(1, channel.currentNote - (subParam / 16.0));
+                                channel.per = Math.round(428.0 * Math.pow(2.0, (49 - channel.currentNote) / 12.0));
+                            } else if (channel.per > 0) {
+                                channel.per = Math.min(856, channel.per + subParam);
+                            }
+                        }
+                        else if (subEffect === 0x0E) {
+                            this.patternDelay = subParam;
+                        }
+                        else if (subEffect === 0x06) {
+                            if (subParam === 0) {
+                                channel.patternLoopRow = this.currentRow;
+                            } else {
+                                if (channel.patternLoopCount === 0) {
+                                    channel.patternLoopCount = subParam;
+                                } else {
+                                    channel.patternLoopCount--;
+                                }
+                                if (channel.patternLoopCount > 0) {
+                                    this.breakOrder = this.currentOrder;
+                                    this.breakRow = channel.patternLoopRow;
+                                    this.breakPending = true;
+                                }
                             }
                         }
                         break;
                 }
             } else {
+                // --- TICK > 0: EFFECTS ---
                 switch (effect) {
                     case 0x00: 
                         if (param > 0 && channel.per > 0) {
                             const arpOffsets = [0, (param >> 4) & 0x0F, param & 0x0F];
                             const currentOffset = arpOffsets[this.currentTick % 3];
-                            channel.per = period * Math.pow(0.9438, currentOffset);
+                            if (this.seqType === 'XM' && this.linearFreq) {
+                                const arpNote = channel.currentNote + currentOffset; 
+                                const clampedNote = Math.min(96, Math.max(1, arpNote));
+                                channel.per = Math.round(428.0 * Math.pow(2.0, (49 - clampedNote) / 12.0));
+                            } else {
+                                const base = (period > 0 && period !== 97) ? period : channel.basePeriod;
+                                channel.per = base * Math.pow(0.9438, currentOffset);
+                            }
                         }
                         break;
                     case 0x01: 
-                        if (channel.per > 0) {
-                            channel.per = Math.max(113, channel.per - param); 
+                        if (this.seqType === 'XM' && this.linearFreq) {
+                            channel.currentNote = Math.min(96, channel.currentNote + (channel.portamentoUpSpeed / 16.0));
+                            channel.per = Math.round(428.0 * Math.pow(2.0, (49 - channel.currentNote) / 12.0));
+                        } else if (channel.per > 0) {
+                            channel.per = Math.max(113, channel.per - channel.portamentoUpSpeed); 
                         }
                         break;
                     case 0x02: 
-                        if (channel.per > 0) {
-                            channel.per = Math.min(856, channel.per + param); 
+                        if (this.seqType === 'XM' && this.linearFreq) {
+                            channel.currentNote = Math.max(1, channel.currentNote - (channel.portamentoDownSpeed / 16.0));
+                            channel.per = Math.round(428.0 * Math.pow(2.0, (49 - channel.currentNote) / 12.0));
+                        } else if (channel.per > 0) {
+                            channel.per = Math.min(856, channel.per + channel.portamentoDownSpeed); 
+                        }
+                        break;
+                    case 0x03:
+                    case 0x05:
+                        if (this.seqType === 'XM' && this.linearFreq) {
+                            if (channel.targetNote > 0 && channel.currentNote !== channel.targetNote) {
+                                const slideAmount = channel.portamentoSpeed / 16.0;
+                                if (channel.currentNote < channel.targetNote) {
+                                    channel.currentNote = Math.min(channel.targetNote, channel.currentNote + slideAmount);
+                                } else {
+                                    channel.currentNote = Math.max(channel.targetNote, channel.currentNote - slideAmount);
+                                }
+                                const clampedNote = Math.min(96, Math.max(1, channel.currentNote));
+                                channel.per = Math.round(428.0 * Math.pow(2.0, (49 - clampedNote) / 12.0));
+                            }
+                        } else {
+                            if (channel.targetPeriod > 0 && channel.per !== channel.targetPeriod) {
+                                if (channel.per < channel.targetPeriod) {
+                                    channel.per = Math.min(channel.targetPeriod, channel.per + channel.portamentoSpeed);
+                                } else {
+                                    channel.per = Math.max(channel.targetPeriod, channel.per - channel.portamentoSpeed);
+                                }
+                            }
+                        }
+                        if (effect === 0x05) {
+                            const slideUp = (channel.volSlideSpeed >> 4) & 0x0F;
+                            const slideDown = channel.volSlideSpeed & 0x0F;
+                            if (slideUp > 0) channel.vol = Math.min(64, channel.vol + slideUp);
+                            else if (slideDown > 0) channel.vol = Math.max(0, channel.vol - slideDown);
+                        }
+                        break;
+                    case 0x04: 
+                    case 0x06: 
+                        if (channel.hasVibrato) {
+                            channel.vibratoPhase = (channel.vibratoPhase + channel.vibratoSpeed) & 63;
+                            const vibSine = Math.sin(channel.vibratoPhase * (Math.PI / 32));
+                            
+                            if (this.seqType === 'XM' && this.linearFreq) {
+                                const vibOffsetNotes = vibSine * (channel.vibratoDepth / 16.0);
+                                const clampedNote = Math.min(96, Math.max(1, channel.currentNote + vibOffsetNotes));
+                                channel.per = Math.round(428.0 * Math.pow(2.0, (49 - clampedNote) / 12.0));
+                            } else {
+                                const vibOffset = vibSine * channel.vibratoDepth * 2.5; 
+                                channel.per = Math.max(113, Math.min(856, Math.round(channel.basePeriod + vibOffset)));
+                            }
+                        }
+                        if (effect === 0x06) {
+                            const slideUp = (channel.volSlideSpeed >> 4) & 0x0F;
+                            const slideDown = channel.volSlideSpeed & 0x0F;
+                            if (slideUp > 0) channel.vol = Math.min(64, channel.vol + slideUp);
+                            else if (slideDown > 0) channel.vol = Math.max(0, channel.vol - slideDown);
                         }
                         break;
                     case 0x0A: 
-                        if (param > 0) {
-                            const slideUp = (param >> 4) & 0x0F;
-                            const slideDown = param & 0x0F;
-                            if (slideUp > 0) {
-                                channel.vol = Math.min(64, channel.vol + slideUp);
-                            } else if (slideDown > 0) {
-                                channel.vol = Math.max(0, channel.vol - slideDown);
-                            }
-                        }
+                        const slideUp = (channel.volSlideSpeed >> 4) & 0x0F;
+                        const slideDown = channel.volSlideSpeed & 0x0F;
+                        if (slideUp > 0) channel.vol = Math.min(64, channel.vol + slideUp);
+                        else if (slideDown > 0) channel.vol = Math.max(0, channel.vol - slideDown);
                         break;
                 }
             }
         }
 
         this.currentTick++;
-        if (this.currentTick >= this.speed) {
+        if (this.currentTick >= this.speed * (this.patternDelay + 1)) {
             this.currentTick = 0;
-            this.currentRow++;
-            if (this.currentRow >= numRows) {
-                this.currentRow = 0;
-                this.currentOrder++;
+            this.patternDelay = 0;
+            
+            if (this.breakPending) {
+                this.currentOrder = this.breakOrder;
+                this.currentRow = this.breakRow;
+                this.breakPending = false;
+            } else {
+                this.currentRow++;
+                if (this.currentRow >= numRows) {
+                    this.currentRow = 0;
+                    this.currentOrder++;
+                }
             }
         }
     }
@@ -4160,6 +4439,13 @@ class PaulaProcessor extends AudioWorkletProcessor {
         let oscValue = 0;
 
         let clockTicksPerSample = this.clock / sampleRate;
+        
+        const CROSSTALK_BLEED = 0.04;
+        const HSYNC_FREQ = 15625.0; 
+        const VBLANK_FREQ = 50.0;
+        
+        const hsyncInc = (HSYNC_FREQ * Math.PI * 2) / sampleRate;
+        const vblankInc = (VBLANK_FREQ * Math.PI * 2) / sampleRate;
 
         for (let i = 0; i < outL.length; i++) {
             if (!this.isPlaying) {
@@ -4171,16 +4457,16 @@ class PaulaProcessor extends AudioWorkletProcessor {
                 if (this.isSequenced) {
                     this.samplesUntilNextTick--;
                     if (this.samplesUntilNextTick <= 0) {
+                        const overshoot = -this.samplesUntilNextTick; 
+                        this.processTrackerTick(overshoot);
+                        
                         const samplesPerTick = (2.5 / this.bpm) * sampleRate;
                         this.samplesUntilNextTick += samplesPerTick;
-                        
-                        this.processTrackerTick();
                     }
                 } else {
                     this.sampleCounter--;
                     if (this.sampleCounter <= 0) {
                         this.sampleCounter += sampleRate / 50.0;
-                        
                         let frame = this.trackData[this.currentFrame];
                         if (frame && frame.cmds) {
                             for (let cmd of frame.cmds) {
@@ -4205,10 +4491,729 @@ class PaulaProcessor extends AudioWorkletProcessor {
             for (let c = 0; c < this.numChannels; c++) {
                 let sampleVal = this.channels[c].step(clockTicksPerSample);
                 if (sampleVal !== 0) {
-                    if ((c % 4) === 0 || (c % 4) === 3) mixedL += sampleVal; 
-                    else mixedR += sampleVal; 
+                    const pan = this.channels[c].pan;
+                    mixedL += sampleVal * Math.cos(pan * Math.PI * 0.5); 
+                    mixedR += sampleVal * Math.sin(pan * Math.PI * 0.5); 
                 }
             }
+            
+            mixedL = Math.tanh(mixedL * 1.15) / 1.05;
+            mixedR = Math.tanh(mixedR * 1.15) / 1.05;
+            
+            let bleedL = mixedL * (1.0 - CROSSTALK_BLEED) + mixedR * CROSSTALK_BLEED;
+            let bleedR = mixedR * (1.0 - CROSSTALK_BLEED) + mixedL * CROSSTALK_BLEED;
+            
+            this.hsyncPhase = (this.hsyncPhase + hsyncInc) % (Math.PI * 2);
+            this.vblankPhase = (this.vblankPhase + vblankInc) % (Math.PI * 2);
+            
+            let hwNoise = Math.sin(this.hsyncPhase) * (0.00015 + Math.sin(this.vblankPhase) * 0.00005);
+            hwNoise += (Math.random() * 2 - 1) * 0.0001;
+            
+            bleedL += hwNoise;
+            bleedR += hwNoise;
+
+            let filteredL = this.staticL.process(bleedL);
+            let filteredR = this.staticR.process(bleedR);
+
+            if (this.ledFilterOn) {
+                filteredL = this.ledL.process(filteredL);
+                filteredR = this.ledR.process(filteredR);
+            }
+
+            outL[i] = filteredL / 2.0;
+            if (outR) outR[i] = filteredR / 2.0; else outL[i] += filteredR / 2.0; 
+            if (i === 0) oscValue = (filteredL + filteredR) / 2.0;
+        }
+
+        this.visCounter = (this.visCounter || 0) + 1;
+        if (this.visCounter % 4 === 0) {
+            let isAudible = Math.abs(oscValue) > 0.001;
+            if (isAudible || this.wasAudible) {
+                const view = this.visualView;
+                view[0] = 1; 
+                view[1] = this.isPlaying ? 1 : 0;
+                view[2] = this.isSequenced 
+                    ? (this.currentOrder * 64 * this.speed + this.currentRow * this.speed + this.currentTick)
+                    : this.currentFrame;
+                view[3] = oscValue;
+
+                for(let c = 0; c < 4; c++) {
+                    let offset = c * 7;
+                    let ch = this.channels[c];
+                    
+                    let simulatedAddress = ch.data ? 0x00020000 + c * 0x4000 + Math.floor(ch.pointer) : 0;
+                    view[4 + offset] = (simulatedAddress >> 8) & 0xFF; 
+                    view[4 + offset + 1] = simulatedAddress & 0xFF;       
+                    
+                    let len = ch.data ? Math.floor(ch.data.length / 2) : 0;
+                    view[4 + offset + 2] = (len >> 8) & 0xFF;
+                    view[4 + offset + 3] = len & 0xFF;
+                    
+                    view[4 + offset + 4] = (ch.per >> 8) & 0xFF;
+                    view[4 + offset + 5] = ch.per & 0xFF;
+                    
+                    view[4 + offset + 6] = Math.round(ch.vol) & 0xFF;
+                }
+
+                view[33] = this.ledFilterOn ? 1.0 : 0.0;
+
+                for (let c = 0; c < 4; c++) {
+                    let ch = this.channels[c];
+                    view[34 + c] = ch.data ? (ch.vol / 64.0) : 0.0;
+                }
+
+                view[38] = this.filterModeState;
+
+                this.port.postMessage(view);
+            }
+            this.wasAudible = isAudible;
+        }
+        return true;
+    }
+}
+
+registerProcessor('paula-exact-processor', PaulaProcessor);
+===== ./js/worklets/amiga/paula-standard.js =====
+// === js/worklets/amiga/paula-standard.js ===
+// ==========================================
+// MOS TECHNOLOGY PAULA 8364 CHIP EMULATION
+// Digital Clean Edition: Full Stereo Panning & XM Logic (No Analog Dirt)
+// ==========================================
+
+class StaticRCFilter {
+    constructor(sampleRate) {
+        this.lastOut = 0;
+        this.alpha = Math.exp(-2.0 * Math.PI * 4421.0 / sampleRate);
+    }
+    process(input) {
+        let out = (1.0 - this.alpha) * input + this.alpha * this.lastOut;
+        this.lastOut = out;
+        return out;
+    }
+}
+
+class AmigaLEDFilter {
+    constructor(sampleRate) {
+        const fc = 3090; 
+        const q = 0.707; 
+        const w0 = 2 * Math.PI * fc / sampleRate;
+        const alpha = Math.sin(w0) / (2 * q);
+        const cosw0 = Math.cos(w0);
+        
+        const a0 = 1 + alpha;
+        this.b0 = ((1 - cosw0) / 2) / a0;
+        this.b1 = (1 - cosw0) / a0;
+        this.b2 = ((1 - cosw0) / 2) / a0;
+        this.a1 = (-2 * cosw0) / a0;
+        this.a2 = (1 - alpha) / a0;
+        
+        this.x1 = 0; this.x2 = 0;
+        this.y1 = 0; this.y2 = 0;
+    }
+    process(x) {
+        let y = this.b0 * x + this.b1 * this.x1 + this.b2 * this.x2 - this.a1 * this.y1 - this.a2 * this.y2;
+        this.x2 = this.x1; this.x1 = x;
+        this.y2 = this.y1; this.y1 = y;
+        return y;
+    }
+}
+
+class PaulaChannel {
+    constructor() {
+        this.vol = 0;       
+        this.per = 428;     
+        this.data = null;   
+        this.pointer = 0;   
+        this.length = 0;    
+        this.repPointer = 0;
+        this.repLength = 0; 
+        this.phase = 0;     
+        this.activeSample = 1; 
+        
+        this.targetPeriod = 0;
+        this.basePeriod = 428;
+        this.currentNote = 0;
+        this.targetNote = 0;
+        
+        this.portamentoSpeed = 0;
+        this.portamentoUpSpeed = 0;
+        this.portamentoDownSpeed = 0;
+        this.volSlideSpeed = 0;
+        this.sampleOffset = 0;
+        
+        this.pan = 0.5;
+        this.vibratoSpeed = 0;
+        this.vibratoDepth = 0;
+        this.vibratoPhase = 0;
+        this.hasVibrato = false;
+        
+        this.lastPlayedSample = 0;
+        
+        this.patternLoopRow = 0;
+        this.patternLoopCount = 0;
+    }
+
+    trigger(data, loopStart, loopLen) {
+        this.data = data;
+        this.pointer = 0;
+        this.phase = 0;
+        
+        if (loopLen > 2) {
+            if (loopStart >= data.length) loopStart = 0;
+            if (loopStart + loopLen > data.length) loopLen = data.length - loopStart;
+            this.length = loopStart + loopLen;
+            this.repPointer = loopStart;
+            this.repLength = loopLen;
+        } else {
+            this.length = data.length;
+            this.repPointer = -1; 
+            this.repLength = 0;
+        }
+    }
+
+    step(clockTicksPerSample) {
+        if (!this.data || this.vol === 0 || this.per === 0 || this.length <= 0) return 0;
+
+        this.phase += clockTicksPerSample / this.per;
+        while (this.phase >= 1.0) {
+            this.phase -= 1.0;
+            this.pointer++;
+            this.length--;
+            
+            if (this.length <= 0) {
+                if (this.repPointer === -1) {
+                    this.data = null; 
+                    return 0;
+                } else {
+                    this.pointer = this.repPointer;
+                    this.length = this.repLength;
+                }
+            }
+        }
+
+        if (!this.data) return 0;
+        
+        let idx = Math.floor(this.pointer);
+        if (idx >= this.data.length) idx = this.data.length - 1;
+        if (idx < 0) idx = 0;
+
+        let rawByte = this.data[idx];
+        let vol6 = Math.round(this.vol); 
+        
+        return (rawByte * vol6) / 8128.0; 
+    }
+}
+
+class PaulaProcessor extends AudioWorkletProcessor {
+    constructor() {
+        super();
+        this.clock = 3546895; 
+        
+        this.channels = [];
+        for (let i = 0; i < 64; i++) {
+            this.channels.push(new PaulaChannel());
+        }
+        
+        this.samples = {}; 
+        this.isPlaying = false;
+        this.visualView = new Float32Array(40);
+
+        this.isSequenced = false;
+        this.seqType = 'MOD';
+        this.linearFreq = false;
+        
+        this.songLength = 0;
+        this.orderTable = null;
+        this.patterns = null;
+        this.bpm = 125;
+        this.speed = 6;
+        this.numChannels = 4; 
+        
+        this.currentOrder = 0;
+        this.currentRow = 0;
+        this.currentTick = 0;
+        this.samplesUntilNextTick = 0;
+        
+        this.patternDelay = 0;
+        this.breakPending = false;
+        this.breakOrder = 0;
+        this.breakRow = 0;
+
+        this.staticL = new StaticRCFilter(sampleRate);
+        this.staticR = new StaticRCFilter(sampleRate);
+        this.ledL = new AmigaLEDFilter(sampleRate);
+        this.ledR = new AmigaLEDFilter(sampleRate);
+        this.ledFilterOn = true; 
+        this.filterModeState = 0; 
+
+        this.port.onmessage = (e) => {
+            const msg = e.data;
+            if (msg.type === 'UPLOAD_SAMPLE') {
+                if (msg.data && msg.data.data instanceof Int8Array) {
+                    this.samples[msg.name] = msg.data;
+                }
+            } else if (msg.type === 'PLAY_TRACK') {
+                const isXM = msg.track && msg.track.type === 'XM';
+                this.linearFreq = msg.track ? (msg.track.linearFreq || false) : false;
+                
+                for (let i = 0; i < 64; i++) {
+                    this.channels[i].data = null;
+                    this.channels[i].vol = 0;
+                    this.channels[i].per = 428;
+                    this.channels[i].pointer = 0;
+                    this.channels[i].length = 0;
+                    this.channels[i].repPointer = 0;
+                    this.channels[i].repLength = 0;
+                    this.channels[i].phase = 0;
+                    this.channels[i].activeSample = 1;
+                    
+                    this.channels[i].targetPeriod = 0;
+                    this.channels[i].basePeriod = 428;
+                    this.channels[i].currentNote = 0;
+                    this.channels[i].targetNote = 0;
+                    
+                    this.channels[i].portamentoSpeed = 0;
+                    this.channels[i].portamentoUpSpeed = 0;
+                    this.channels[i].portamentoDownSpeed = 0;
+                    this.channels[i].volSlideSpeed = 0;
+                    this.channels[i].sampleOffset = 0;
+                    
+                    this.channels[i].patternLoopRow = 0;
+                    this.channels[i].patternLoopCount = 0;
+                    
+                    this.channels[i].lastPlayedSample = 0;
+                    
+                    if (isXM) {
+                        this.channels[i].pan = 0.5;
+                    } else {
+                        const panMod = i % 4;
+                        this.channels[i].pan = (panMod === 0 || panMod === 3) ? 0.0 : 1.0;
+                    }
+                    this.channels[i].vibratoSpeed = 0;
+                    this.channels[i].vibratoDepth = 0;
+                    this.channels[i].vibratoPhase = 0;
+                    this.channels[i].hasVibrato = false;
+                }
+
+                this.filterModeState = 0;
+
+                if (msg.track && msg.track.isSequenced) {
+                    this.isSequenced = true;
+                    this.seqType = msg.track.type;
+                    this.songLength = msg.track.songLength;
+                    this.orderTable = msg.track.orderTable;
+                    this.patterns = msg.track.patterns;
+                    this.bpm = msg.track.bpm || 125;
+                    this.speed = msg.track.speed || 6;
+                    this.numChannels = msg.track.numChannels || 4;
+
+                    this.currentOrder = 0;
+                    this.currentRow = 0;
+                    this.currentTick = 0;
+                    this.samplesUntilNextTick = 0;
+                    this.patternDelay = 0;
+                    this.breakPending = false;
+                    this.isPlaying = true;
+                } else {
+                    this.isSequenced = false;
+                    this.trackData = msg.track;
+                    this.numChannels = 4; 
+                    this.currentFrame = 0;
+                    this.sampleCounter = 0;
+                    this.isPlaying = true;
+                }
+            } else if (msg.type === 'STOP_TRACK') {
+                this.isPlaying = false;
+                for (let i = 0; i < 64; i++) {
+                    this.channels[i].data = null;
+                    this.channels[i].vol = 0;
+                }
+            } else if (msg.type === 'RESUME_TRACK') {
+                this.isPlaying = true;
+            } else if (msg.type === 'SEEK_TRACK') {
+                if (this.isSequenced) {
+                    const ticksPerOrder = 64 * this.speed;
+                    const targetOrder = Math.floor(msg.frame / ticksPerOrder);
+                    const remainingTicks = msg.frame % ticksPerOrder;
+                    
+                    this.currentOrder = targetOrder % this.songLength;
+                    this.currentRow = Math.floor(remainingTicks / this.speed) % 64;
+                    this.currentTick = remainingTicks % this.speed;
+                    this.patternDelay = 0;
+                    this.breakPending = false;
+                } else {
+                    if (this.trackData) this.currentFrame = msg.frame % this.trackData.length;
+                }
+            } else if (msg.type === 'CYCLE_FILTER') {
+                this.filterModeState = (this.filterModeState + 1) % 3;
+                if (this.filterModeState === 1) this.ledFilterOn = true; 
+                else if (this.filterModeState === 2) this.ledFilterOn = false; 
+            }
+        };
+    }
+
+    processTrackerTick(overshoot) {
+        if (this.currentOrder >= this.songLength) {
+            this.currentOrder = 0; 
+        }
+
+        const patternIdx = this.orderTable[this.currentOrder];
+        const patternObj = this.patterns[patternIdx];
+        if (!patternObj) return;
+
+        const pattern = patternObj.data;
+        const numRows = patternObj.numRows;
+        const rowOffset = this.currentRow * this.numChannels * 6;
+        const clockTicksPerSample = this.clock / sampleRate;
+
+        for (let ch = 0; ch < this.numChannels; ch++) {
+            const cellOffset = rowOffset + (ch * 6);
+            const period = pattern[cellOffset] | (pattern[cellOffset + 1] << 8);
+            const sample = pattern[cellOffset + 2];
+            const volume = pattern[cellOffset + 3];
+            const effect = pattern[cellOffset + 4];
+            const param = pattern[cellOffset + 5];
+
+            const channel = this.channels[ch];
+            
+            if (sample > 0) {
+                channel.activeSample = sample;
+            }
+            
+            const activeSample = channel.activeSample || 1;
+            const smpName = this.seqType === 'MOD' ? `mod_sample_${activeSample}` : `xm_sample_${activeSample}`;
+            const currentSmpObj = this.samples[smpName];
+
+            const isSampleChange = (sample > 0 && sample !== channel.lastPlayedSample);
+            const isPortamento = (effect === 0x03 || effect === 0x05) && (channel.data !== null) && 
+                                 (this.seqType === 'XM' ? true : !isSampleChange);
+
+            if (this.currentTick === 0) {
+                const hasNote = (period > 0 && period !== 97);
+                if (period === 97) channel.vol = 0;
+
+                if (hasNote) {
+                    let calculatedPeriod = period;
+                    let actualNote = 0;
+
+                    if (this.seqType === 'XM') {
+                        const relNote = currentSmpObj ? (currentSmpObj.relNote || 0) : 0;
+                        const finetune = currentSmpObj ? (currentSmpObj.finetune || 0) : 0;
+                        actualNote = period + relNote + (finetune / 128.0);
+                        const clampedNote = Math.min(96, Math.max(1, actualNote));
+                        calculatedPeriod = Math.round(428.0 * Math.pow(2.0, (49 - clampedNote) / 12.0));
+                    }
+
+                    if (isPortamento) {
+                        channel.targetPeriod = calculatedPeriod;
+                        channel.targetNote = actualNote;
+                    } else {
+                        channel.per = calculatedPeriod;
+                        channel.basePeriod = calculatedPeriod;
+                        channel.targetPeriod = 0;
+                        channel.currentNote = actualNote;
+                        channel.targetNote = 0;
+                    }
+                }
+
+                if (hasNote && currentSmpObj && currentSmpObj.data) {
+                    if (!isPortamento) {
+                        channel.trigger(currentSmpObj.data, currentSmpObj.loopStart, currentSmpObj.loopLen);
+                        channel.phase = overshoot * (clockTicksPerSample / channel.per);
+                        
+                        if (effect === 0x09) {
+                            if (param > 0) channel.sampleOffset = param * 256;
+                            channel.pointer = channel.sampleOffset;
+                        }
+                    }
+                    if (sample > 0) {
+                        channel.lastPlayedSample = sample;
+                    }
+                }
+
+                // --- Panning & Volume Übernahmen ---
+                if (sample > 0 && currentSmpObj) {
+                    channel.vol = currentSmpObj.baseVolume; 
+                    if (currentSmpObj.pan !== undefined) {
+                        channel.pan = currentSmpObj.pan / 255.0;
+                    }
+                }
+
+                if (volume !== 0xFF) {
+                    if (volume >= 0xC0 && volume <= 0xCF) {
+                        channel.pan = (volume - 0xC0) / 15.0;
+                    } else if (volume <= 64) {
+                        channel.vol = volume; 
+                    }
+                }
+
+                if (effect !== 0x04 && effect !== 0x06) {
+                    channel.hasVibrato = false;
+                }
+
+                switch (effect) {
+                    case 0x01: if (param > 0) channel.portamentoUpSpeed = param; break;
+                    case 0x02: if (param > 0) channel.portamentoDownSpeed = param; break;
+                    case 0x03: if (param > 0) channel.portamentoSpeed = param; break;
+                    case 0x04: 
+                        if (param > 0) {
+                            if ((param >> 4) > 0) channel.vibratoSpeed = (param >> 4) & 0x0F;
+                            if ((param & 0x0F) > 0) channel.vibratoDepth = param & 0x0F;
+                        }
+                        channel.hasVibrato = true;
+                        break;
+                    case 0x05:
+                    case 0x0A: 
+                        if (param > 0) channel.volSlideSpeed = param; 
+                        break;
+                    case 0x06: 
+                        if (param > 0) channel.volSlideSpeed = param;
+                        channel.hasVibrato = true;
+                        break;
+                    case 0x08: 
+                        channel.pan = param / 255.0;
+                        break;
+                    case 0x0C: 
+                        channel.vol = param > 64 ? 64 : param;
+                        break;
+                    case 0x0F: 
+                        if (param > 0) {
+                            if (param < 32) this.speed = param;
+                            else this.bpm = param;
+                        }
+                        break;
+                    case 0x0B: 
+                        this.breakOrder = param;
+                        this.breakRow = 0;
+                        this.breakPending = true;
+                        break;
+                    case 0x0D: 
+                        this.breakOrder = this.currentOrder + 1;
+                        this.breakRow = ((param >> 4) * 10) + (param & 0x0F);
+                        this.breakPending = true;
+                        break;
+                        
+                    case 0x0E:
+                        const subEffect = param >> 4;
+                        const subParam = param & 0x0F;
+                        if (subEffect === 0x00) { 
+                            if (this.filterModeState === 0) this.ledFilterOn = (subParam === 0); 
+                        } else if (subEffect === 0x08) { 
+                            channel.pan = subParam / 15.0;
+                        } else if (subEffect === 0x0A) { 
+                            channel.vol = Math.min(64, channel.vol + subParam);
+                        } else if (subEffect === 0x0B) { 
+                            channel.vol = Math.max(0, channel.vol - subParam);
+                        } else if (subEffect === 0x01) { 
+                            if (this.seqType === 'XM' && this.linearFreq) {
+                                channel.currentNote = Math.min(96, channel.currentNote + (subParam / 16.0));
+                                channel.per = Math.round(428.0 * Math.pow(2.0, (49 - channel.currentNote) / 12.0));
+                            } else if (channel.per > 0) {
+                                channel.per = Math.max(113, channel.per - subParam);
+                            }
+                        } else if (subEffect === 0x02) { 
+                            if (this.seqType === 'XM' && this.linearFreq) {
+                                channel.currentNote = Math.max(1, channel.currentNote - (subParam / 16.0));
+                                channel.per = Math.round(428.0 * Math.pow(2.0, (49 - channel.currentNote) / 12.0));
+                            } else if (channel.per > 0) {
+                                channel.per = Math.min(856, channel.per + subParam);
+                            }
+                        }
+                        else if (subEffect === 0x0E) {
+                            this.patternDelay = subParam;
+                        }
+                        else if (subEffect === 0x06) {
+                            if (subParam === 0) {
+                                channel.patternLoopRow = this.currentRow;
+                            } else {
+                                if (channel.patternLoopCount === 0) {
+                                    channel.patternLoopCount = subParam;
+                                } else {
+                                    channel.patternLoopCount--;
+                                }
+                                if (channel.patternLoopCount > 0) {
+                                    this.breakOrder = this.currentOrder;
+                                    this.breakRow = channel.patternLoopRow;
+                                    this.breakPending = true;
+                                }
+                            }
+                        }
+                        break;
+                }
+            } else {
+                // --- TICK > 0: EFFECTS ---
+                switch (effect) {
+                    case 0x00: 
+                        if (param > 0 && channel.per > 0) {
+                            const arpOffsets = [0, (param >> 4) & 0x0F, param & 0x0F];
+                            const currentOffset = arpOffsets[this.currentTick % 3];
+                            if (this.seqType === 'XM' && this.linearFreq) {
+                                const arpNote = channel.currentNote + currentOffset; 
+                                const clampedNote = Math.min(96, Math.max(1, arpNote));
+                                channel.per = Math.round(428.0 * Math.pow(2.0, (49 - clampedNote) / 12.0));
+                            } else {
+                                const base = (period > 0 && period !== 97) ? period : channel.basePeriod;
+                                channel.per = base * Math.pow(0.9438, currentOffset);
+                            }
+                        }
+                        break;
+                    case 0x01: 
+                        if (this.seqType === 'XM' && this.linearFreq) {
+                            channel.currentNote = Math.min(96, channel.currentNote + (channel.portamentoUpSpeed / 16.0));
+                            channel.per = Math.round(428.0 * Math.pow(2.0, (49 - channel.currentNote) / 12.0));
+                        } else if (channel.per > 0) {
+                            channel.per = Math.max(113, channel.per - channel.portamentoUpSpeed); 
+                        }
+                        break;
+                    case 0x02: 
+                        if (this.seqType === 'XM' && this.linearFreq) {
+                            channel.currentNote = Math.max(1, channel.currentNote - (channel.portamentoDownSpeed / 16.0));
+                            channel.per = Math.round(428.0 * Math.pow(2.0, (49 - channel.currentNote) / 12.0));
+                        } else if (channel.per > 0) {
+                            channel.per = Math.min(856, channel.per + channel.portamentoDownSpeed); 
+                        }
+                        break;
+                    case 0x03:
+                    case 0x05:
+                        if (this.seqType === 'XM' && this.linearFreq) {
+                            if (channel.targetNote > 0 && channel.currentNote !== channel.targetNote) {
+                                const slideAmount = channel.portamentoSpeed / 16.0;
+                                if (channel.currentNote < channel.targetNote) {
+                                    channel.currentNote = Math.min(channel.targetNote, channel.currentNote + slideAmount);
+                                } else {
+                                    channel.currentNote = Math.max(channel.targetNote, channel.currentNote - slideAmount);
+                                }
+                                const clampedNote = Math.min(96, Math.max(1, channel.currentNote));
+                                channel.per = Math.round(428.0 * Math.pow(2.0, (49 - clampedNote) / 12.0));
+                            }
+                        } else {
+                            if (channel.targetPeriod > 0 && channel.per !== channel.targetPeriod) {
+                                if (channel.per < channel.targetPeriod) {
+                                    channel.per = Math.min(channel.targetPeriod, channel.per + channel.portamentoSpeed);
+                                } else {
+                                    channel.per = Math.max(channel.targetPeriod, channel.per - channel.portamentoSpeed);
+                                }
+                            }
+                        }
+                        if (effect === 0x05) {
+                            const slideUp = (channel.volSlideSpeed >> 4) & 0x0F;
+                            const slideDown = channel.volSlideSpeed & 0x0F;
+                            if (slideUp > 0) channel.vol = Math.min(64, channel.vol + slideUp);
+                            else if (slideDown > 0) channel.vol = Math.max(0, channel.vol - slideDown);
+                        }
+                        break;
+                    case 0x04: 
+                    case 0x06: 
+                        if (channel.hasVibrato) {
+                            channel.vibratoPhase = (channel.vibratoPhase + channel.vibratoSpeed) & 63;
+                            const vibSine = Math.sin(channel.vibratoPhase * (Math.PI / 32));
+                            
+                            if (this.seqType === 'XM' && this.linearFreq) {
+                                const vibOffsetNotes = vibSine * (channel.vibratoDepth / 16.0);
+                                const clampedNote = Math.min(96, Math.max(1, channel.currentNote + vibOffsetNotes));
+                                channel.per = Math.round(428.0 * Math.pow(2.0, (49 - clampedNote) / 12.0));
+                            } else {
+                                const vibOffset = vibSine * channel.vibratoDepth * 2.5; 
+                                channel.per = Math.max(113, Math.min(856, Math.round(channel.basePeriod + vibOffset)));
+                            }
+                        }
+                        if (effect === 0x06) {
+                            const slideUp = (channel.volSlideSpeed >> 4) & 0x0F;
+                            const slideDown = channel.volSlideSpeed & 0x0F;
+                            if (slideUp > 0) channel.vol = Math.min(64, channel.vol + slideUp);
+                            else if (slideDown > 0) channel.vol = Math.max(0, channel.vol - slideDown);
+                        }
+                        break;
+                    case 0x0A: 
+                        const slideUp = (channel.volSlideSpeed >> 4) & 0x0F;
+                        const slideDown = channel.volSlideSpeed & 0x0F;
+                        if (slideUp > 0) channel.vol = Math.min(64, channel.vol + slideUp);
+                        else if (slideDown > 0) channel.vol = Math.max(0, channel.vol - slideDown);
+                        break;
+                }
+            }
+        }
+
+        this.currentTick++;
+        if (this.currentTick >= this.speed * (this.patternDelay + 1)) {
+            this.currentTick = 0;
+            this.patternDelay = 0;
+            
+            if (this.breakPending) {
+                this.currentOrder = this.breakOrder;
+                this.currentRow = this.breakRow;
+                this.breakPending = false;
+            } else {
+                this.currentRow++;
+                if (this.currentRow >= numRows) {
+                    this.currentRow = 0;
+                    this.currentOrder++;
+                }
+            }
+        }
+    }
+
+    process(inputs, outputs) {
+        const outL = outputs[0][0]; 
+        const outR = outputs[0].length > 1 ? outputs[0][1] : null; 
+        let oscValue = 0;
+
+        let clockTicksPerSample = this.clock / sampleRate;
+
+        for (let i = 0; i < outL.length; i++) {
+            if (!this.isPlaying) {
+                outL[i] = 0; if (outR) outR[i] = 0;
+                continue; 
+            }
+            
+            if (this.isPlaying) {
+                if (this.isSequenced) {
+                    this.samplesUntilNextTick--;
+                    if (this.samplesUntilNextTick <= 0) {
+                        const overshoot = -this.samplesUntilNextTick; 
+                        
+                        this.processTrackerTick(overshoot);
+                        
+                        const samplesPerTick = (2.5 / this.bpm) * sampleRate;
+                        this.samplesUntilNextTick += samplesPerTick;
+                    }
+                } else {
+                    this.sampleCounter--;
+                    if (this.sampleCounter <= 0) {
+                        this.sampleCounter += sampleRate / 50.0;
+                        let frame = this.trackData[this.currentFrame];
+                        if (frame && frame.cmds) {
+                            for (let cmd of frame.cmds) {
+                                const ch = this.channels[cmd.ch];
+                                if (cmd.smp) {
+                                    let sampleObj = this.samples[cmd.smp];
+                                    if (sampleObj && sampleObj.data) {
+                                        ch.trigger(sampleObj.data, sampleObj.loopStart, sampleObj.loopLen);
+                                    }
+                                }
+                                if (cmd.per !== undefined) ch.per = cmd.per;
+                                if (cmd.vol !== undefined) ch.vol = cmd.vol; 
+                            }
+                        }
+                        this.currentFrame = (this.currentFrame + 1) % this.trackData.length;
+                    }
+                }
+            }
+
+            let mixedL = 0, mixedR = 0;
+            
+            for (let c = 0; c < this.numChannels; c++) {
+                let sampleVal = this.channels[c].step(clockTicksPerSample);
+                if (sampleVal !== 0) {
+                    // Panning (Constant-Power)
+                    const pan = this.channels[c].pan;
+                    mixedL += sampleVal * Math.cos(pan * Math.PI * 0.5); 
+                    mixedR += sampleVal * Math.sin(pan * Math.PI * 0.5); 
+                }
+            }
+            
+            // --- NO CROSSTALK, NO TANH SATURATION, NO HSYNC NOISE ---
+            // Reines, sauberes Digital-Routing in die Filter
             
             let filteredL = this.staticL.process(mixedL);
             let filteredR = this.staticR.process(mixedR);
@@ -4260,7 +5265,6 @@ class PaulaProcessor extends AudioWorkletProcessor {
                     view[34 + c] = ch.data ? (ch.vol / 64.0) : 0.0;
                 }
 
-                // === USER OVERRIDE STATE IN DEN PUFFER ÜBERTRAGEN (0 = Auto, 1/2 = Override) ===
                 view[38] = this.filterModeState;
 
                 this.port.postMessage(view);
@@ -4271,7 +5275,8 @@ class PaulaProcessor extends AudioWorkletProcessor {
     }
 }
 
-registerProcessor('paula-processor', PaulaProcessor);
+// Hier wichtig: Der eindeutige Namespace für den sauberen Core
+registerProcessor('paula-standard-processor', PaulaProcessor);
 ===== ./js/worklets/atari/ym-bladerunner.js =====
 // === js/worklets/atari/ym-bladerunner.js ===
 // =========================================================
@@ -5482,11 +6487,12 @@ class YMProcessor extends AudioWorkletProcessor {
 }
 
 registerProcessor('ym-processor', YMProcessor);
-===== ./js/worklets/c64/sid-worklet.js =====
-// === js/worklets/c64/sid-worklet.js ===
+===== ./js/worklets/c64/sid-exact.js =====
+// === js/worklets/c64/sid-exact.js ===
 // =========================================================
 // MOS TECHNOLOGY SID 6581 AUDIO WORKLET PROCESSOR
-// High-Fidelity Cycle-Exact CPU Lockstep Mischer & Bilinear SVF Filter (Safe & Fixed!)
+// High-Fidelity Cycle-Exact Lockstep Mischer & 4-Pole Butterworth Decimation
+// Optimized 1-MHz ZDF Filter Stage
 // =========================================================
 
 import { CPU6502 } from '../lib/cpu6502.js';
@@ -5498,15 +6504,18 @@ class SIDProcessor extends AudioWorkletProcessor {
         super();
         this.clock = 985248; // PAL C64 Clock
         this.sid = new SIDChip();
+        
+        // Aktiviere die authentische analoge JFET-Sättigung für den Exact-Core
+        this.sid.useJfetSaturation = true;
+        
         this.cpu = new CPU6502(this.sid);
         this.dcBlock = new DCBlocker();
 
         this.trackData = null;
         this.isPlaying = false;
         
-        // Lockstep-Verteiler Variablen
         this.cycleAccumulator = 0.0;
-        this.vblankCycles = 19705; // Standard-PAL-VBLANK (985248 / 50 Hz)
+        this.vblankCycles = 19705; 
         this.currentFrame = 0;
         
         this.initAddress = 0;
@@ -5515,6 +6524,24 @@ class SIDProcessor extends AudioWorkletProcessor {
         this.isIrqRoutine = false; 
 
         this.temperature = 55.0;
+        this.cpuCyclesRemaining = 0;
+        
+        // --- OPTIMIERUNG: Vorberechnete Butterworth-Dämpfungen & Teiler ---
+        const fc = 18000.0; 
+        this.aaf_g = Math.tan(Math.PI * fc / this.clock);
+        const r1 = 1.847759; // Damping (1/Q1) für Stage 1
+        const r2 = 0.765366; // Damping (1/Q2) für Stage 2
+        
+        this.aaf_r1 = r1;
+        this.aaf_r2 = r2;
+        
+        // Kehrwert der ZDF-Nenner vorab berechnen, um die 1-MHz-Divisionen komplett zu eliminieren!
+        this.aaf_scale1 = 1.0 / (1.0 + this.aaf_g * (this.aaf_g + r1));
+        this.aaf_scale2 = 1.0 / (1.0 + this.aaf_g * (this.aaf_g + r2));
+        
+        this.aaf1_l = 0; this.aaf1_b = 0;
+        this.aaf2_l = 0; this.aaf2_b = 0;
+        
         this.visualView = new Float32Array(40);
 
         this.port.onmessage = (e) => {
@@ -5522,14 +6549,21 @@ class SIDProcessor extends AudioWorkletProcessor {
             
             if (msg.type === 'SET_TEMPERATURE') {
                 this.temperature = Math.min(75, Math.max(15, msg.value));
+                this.sid.temperature = this.temperature; 
                 return;
             }
 
             if (msg.isSidFile) {
+                // --- NEU: Audio-Pop Cleanup ---
+                this.aaf1_l = 0; this.aaf1_b = 0;
+                this.aaf2_l = 0; this.aaf2_b = 0;
+                this.dcBlock = new DCBlocker();
+
                 this.cpu.reset(msg.loadAddress, msg.c64Code);
+
                 this.initAddress = msg.initAddress;
                 this.playAddress = msg.playAddress;
-                this.isIrqRoutine = false; // Zurücksetzen für neuen Track
+                this.isIrqRoutine = false; 
                 
                 let songIndex = (msg.startSong > 0 ? msg.startSong - 1 : 0) & 0xFF;
                 this.cpu.a = songIndex;
@@ -5554,24 +6588,27 @@ class SIDProcessor extends AudioWorkletProcessor {
                     }
                 }
 
-                // Initial-Reset der Mischer-Verteiler (Temperatur bleibt persistent!)
                 this.cycleAccumulator = 0.0;
                 this.vblankCycles = 19705;
+                this.cpuCyclesRemaining = 0;
                 this.cpu.isIdle = true;
 
                 this.currentFrame = 0;
                 this.maxFrames = msg.length || 7500;
                 this.isPlaying = true;
-                
-                console.log(`[6502 CPU] Cycle-Exact Lockstep ready.`);
             } else if (msg.type === 'STOP_TRACK') {
                 this.isPlaying = false;
             } else if (msg.type === 'RESUME_TRACK') {
                 this.isPlaying = true;
-            } else if (msg.type === 'SEEK_TRACK') {
-                this.currentFrame = msg.frame % this.maxFrames;
             } else if (msg.type === 'CHANGE_SUBSONG') {
+                // --- NEU: Audio-Pop Cleanup ---
+                this.aaf1_l = 0; this.aaf1_b = 0;
+                this.aaf2_l = 0; this.aaf2_b = 0;
+                this.dcBlock = new DCBlocker();
+
                 this.sid = new SIDChip();
+                this.sid.useJfetSaturation = true;
+                this.sid.temperature = this.temperature;
                 this.cpu.sid = this.sid;
                 
                 let songIndex = (msg.frame > 0 ? msg.frame - 1 : 0) & 0xFF;
@@ -5584,6 +6621,7 @@ class SIDProcessor extends AudioWorkletProcessor {
                 
                 this.cycleAccumulator = 0.0;
                 this.vblankCycles = 19705;
+                this.cpuCyclesRemaining = 0;
                 this.cpu.isIdle = true;
                 this.currentFrame = 0;
                 this.maxFrames = msg.length || 7500;
@@ -5602,126 +6640,88 @@ class SIDProcessor extends AudioWorkletProcessor {
                 continue; 
             }
             
-            // === NATIVE HIGH-PERFORMANCE CYCLE-EXACT LOCKSTEP ENGINE ===
             let cyclesToRun = 0;
             if (this.isPlaying && this.playAddress > 0) {
                 this.cycleAccumulator += this.clock / sampleRate;
                 cyclesToRun = Math.floor(this.cycleAccumulator);
                 this.cycleAccumulator -= cyclesToRun;
 
-                if (this.useCiaTimer) {
-                    this.cpu.ciaTimerA -= cyclesToRun;
-                    if (this.cpu.ciaTimerA <= 0) {
-                        let timerPeriod = (this.cpu.ram[0xDC05] << 8) | this.cpu.ram[0xDC04];
-                        if (timerPeriod === 0) timerPeriod = 19583; 
-                        this.cpu.ciaTimerA += timerPeriod;
-                        
-                        // Interrupt nur auslösen, wenn die CPU bereit ist
-                        if (this.cpu.isIdle) {
-                            this.cpu.isIdle = false;
-                            if (this.isIrqRoutine) {
-                                this.cpu.push(0xFF);
-                                this.cpu.push(0xFE);
-                                this.cpu.push(this.cpu.p); 
-                            } else {
-                                this.cpu.push(0xFF);
-                                this.cpu.push(0xFE);
+                // --- THE NATIVE CYCLE-EXACT LOCKSTEP LOOP ---
+                for (let c = 0; c < cyclesToRun; c++) {
+                    
+                    // 1. Taktgenaue Timer & Interrupt Überwachung
+                    if (this.useCiaTimer) {
+                        this.cpu.ciaTimerA--;
+                        if (this.cpu.ciaTimerA <= 0) {
+                            let timerPeriod = (this.cpu.ram[0xDC05] << 8) | this.cpu.ram[0xDC04];
+                            if (timerPeriod === 0) timerPeriod = 19583; 
+                            this.cpu.ciaTimerA += timerPeriod;
+                            
+                            if (this.cpu.isIdle) {
+                                this.cpu.isIdle = false;
+                                if (this.isIrqRoutine) {
+                                    this.cpu.push(0xFF); this.cpu.push(0xFE); this.cpu.push(this.cpu.p); 
+                                } else {
+                                    this.cpu.push(0xFF); this.cpu.push(0xFE);
+                                }
+                                this.cpu.pc = this.playAddress;
+                                this.currentFrame = (this.currentFrame + 1) % this.maxFrames;
                             }
-                            this.cpu.pc = this.playAddress;
-                            this.currentFrame = (this.currentFrame + 1) % this.maxFrames;
-                        }
-                    }
-                } else {
-                    this.vblankCycles -= cyclesToRun;
-                    if (this.vblankCycles <= 0) {
-                        this.vblankCycles += 19705; 
-                        
-                        if (this.cpu.isIdle) {
-                            this.cpu.isIdle = false;
-                            if (this.isIrqRoutine) {
-                                this.cpu.push(0xFF);
-                                this.cpu.push(0xFE);
-                                this.cpu.push(this.cpu.p); 
-                            } else {
-                                this.cpu.push(0xFF);
-                                this.cpu.push(0xFE);
-                            }
-                            this.cpu.pc = this.playAddress;
-                            this.currentFrame = (this.currentFrame + 1) % this.maxFrames;
-                        }
-                    }
-                }
-
-                let remainingCycles = cyclesToRun;
-                while (remainingCycles > 0) {
-                    if (!this.cpu.isIdle) {
-                        let cyclesUsed = this.cpu.step();
-                        remainingCycles -= cyclesUsed;
-                        if (this.cpu.pc === 0xFFFE || this.cpu.pc === 0xFFFF) {
-                            this.cpu.isIdle = true; 
                         }
                     } else {
-                        remainingCycles = 0; 
+                        this.vblankCycles--;
+                        if (this.vblankCycles <= 0) {
+                            this.vblankCycles += 19705; 
+                            
+                            if (this.cpu.isIdle) {
+                                this.cpu.isIdle = false;
+                                if (this.isIrqRoutine) {
+                                    this.cpu.push(0xFF); this.cpu.push(0xFE); this.cpu.push(this.cpu.p); 
+                                } else {
+                                    this.cpu.push(0xFF); this.cpu.push(0xFE);
+                                }
+                                this.cpu.pc = this.playAddress;
+                                this.currentFrame = (this.currentFrame + 1) % this.maxFrames;
+                            }
+                        }
                     }
-                }
-            }
 
-            let mix = 0;
-            for (let v = 0; v < 3; v++) {
-                let voiceOut = this.sid.synthesizeVoice(v, this.clock, sampleRate, cyclesToRun);
+                    // 2. CPU-Befehle ausführen
+                    if (this.cpuCyclesRemaining <= 0) {
+                        if (!this.cpu.isIdle) {
+                            let cyclesUsed = this.cpu.step();
+                            this.cpuCyclesRemaining += cyclesUsed;
+                            if (this.cpu.pc === 0xFFFE || this.cpu.pc === 0xFFFF) {
+                                this.cpu.isIdle = true; 
+                            }
+                        }
+                    }
+                    if (this.cpuCyclesRemaining > 0) {
+                        this.cpuCyclesRemaining--;
+                    }
+                    
+                    // 3. Taktgenaue Soundchip-Aktualisierung (bei 985.248 Hz)
+                    this.sid.clock();
+                    let out = this.sid.outputSample;
+                    
+                    // 4. Butterworth Decimation mit vorbereiteter ZDF-Multiplikation (Keine Divisionen!)
+                    let hp1 = (out - this.aaf1_l - this.aaf_r1 * this.aaf1_b) * this.aaf_scale1;
+                    let bp1 = this.aaf1_b + this.aaf_g * hp1;
+                    this.aaf1_l = this.aaf1_l + this.aaf_g * bp1;
+                    this.aaf1_b = bp1;
+                    
+                    let hp2 = (this.aaf1_l - this.aaf2_l - this.aaf_r2 * this.aaf2_b) * this.aaf_scale2;
+                    let bp2 = this.aaf2_b + this.aaf_g * hp2;
+                    this.aaf2_l = this.aaf2_l + this.aaf_g * bp2;
+                    this.aaf2_b = bp2;
+                }
                 
-                if (this.sid.regs[23] & (1 << v)) {
-                    // Grenzfrequenz (Cutoff) berechnen
-                    let cutoffReg = (this.sid.regs[21] & 7) | (this.sid.regs[22] << 3);
-                    let norm = cutoffReg / 2047.0;
-                    let baseCutoff = 220.0 + Math.pow(norm, 1.4) * 11500.0;
+                let finalSample = this.dcBlock.process(this.aaf2_l);
 
-                    let thermalCoefficient = 1.0 - (this.temperature - 55.0) * 0.0035;
-                    let activeCutoff = baseCutoff * thermalCoefficient;
-                    if (activeCutoff < 30) activeCutoff = 30;
-                    if (activeCutoff > 16000) activeCutoff = 16000;
-
-                    let g = Math.tan(Math.PI * activeCutoff / sampleRate);
-                    
-                    let resReg = this.sid.regs[23] >> 4;
-                    let normRes = resReg / 15.0;
-                    let q = 1.0 - normRes * 0.92;
-                    let thermalDamp = 1.0 + (this.temperature - 55.0) * 0.0015;
-                    q = Math.min(1.0, Math.max(0.04, q * thermalDamp));
-
-                    // === ZERO-DELAY BILINEAR TRANSFORM SVF SOLVER ===
-                    // Errechnet die Schleife mathematisch komplett sauber und sturzfest!
-                    let h = voiceOut - this.sid.filterLow;
-                    let hp = (h - q * this.sid.filterBand) / (1.0 + g * (g + q));
-                    let bp = this.sid.filterBand + g * hp;
-                    let lp = this.sid.filterLow + g * bp;
-                    
-                    this.sid.filterLow = lp;
-                    this.sid.filterBand = bp / (1.0 + Math.abs(bp) * 0.15); // Sanfte analoge Resonanzbegrenzung
-                    
-                    // Anti-Windup Hard-Clamping
-                    if (this.sid.filterBand > 3.0) this.sid.filterBand = 3.0;
-                    if (this.sid.filterBand < -3.0) this.sid.filterBand = -3.0;
-                    if (this.sid.filterLow > 3.0) this.sid.filterLow = 3.0;
-                    if (this.sid.filterLow < -3.0) this.sid.filterLow = -3.0;
-                    
-                    let filterOut = 0;
-                    if (this.sid.filterMode & 16) filterOut += this.sid.filterLow; 
-                    if (this.sid.filterMode & 32) filterOut += this.sid.filterBand; 
-                    if (this.sid.filterMode & 64) filterOut += hp; 
-                    
-                    let leakage = voiceOut * 0.11;
-                    voiceOut = filterOut + leakage;
-                }
-                mix += voiceOut;
+                outL[i] = finalSample;
+                if (outR) outR[i] = finalSample;
+                if (i === 0) visualValue = finalSample;
             }
-
-            let finalOut = (mix / 3.0) * this.sid.masterVol;
-            finalOut = this.dcBlock.process(finalOut);
-
-            outL[i] = finalOut;
-            if (outR) outR[i] = finalOut;
-            if (i === 0) visualValue = finalOut;
         }
 
         this.visCounter = (this.visCounter || 0) + 1;
@@ -5740,7 +6740,6 @@ class SIDProcessor extends AudioWorkletProcessor {
 
                 view[33] = this.temperature;
 
-                // Kanallautstärken der 3 Voices übertragen (Index 34-36)
                 for (let v = 0; v < 3; v++) {
                     view[34 + v] = this.sid.voices[v].envelope_counter / 255.0;
                 }
@@ -5754,12 +6753,263 @@ class SIDProcessor extends AudioWorkletProcessor {
     }
 }
 
-registerProcessor('sid-processor', SIDProcessor);
+registerProcessor('sid-exact-processor', SIDProcessor);
+===== ./js/worklets/c64/sid-standard.js =====
+// === js/worklets/c64/sid-standard.js ===
+// =========================================================
+// MOS TECHNOLOGY SID 6581 AUDIO WORKLET PROCESSOR
+// CPU-Optimized 1MHz Lockstep Core with Boxcar Decimation
+// =========================================================
+
+import { CPU6502 } from '../lib/cpu6502.js';
+import { SIDChip } from '../lib/sid-chip.js';
+import { DCBlocker } from '../lib/dsp-utils.js';
+
+class SIDProcessor extends AudioWorkletProcessor {
+    constructor() {
+        super();
+        this.clock = 985248; 
+        this.sid = new SIDChip();
+        
+        // Deaktiviere die teure analoge JFET-Sättigung für den Standard-Core
+        this.sid.useJfetSaturation = false;
+        
+        this.cpu = new CPU6502(this.sid);
+        this.dcBlock = new DCBlocker();
+
+        this.trackData = null;
+        this.isPlaying = false;
+        
+        this.cycleAccumulator = 0.0;
+        this.vblankCycles = 19705; 
+        this.currentFrame = 0;
+        
+        this.initAddress = 0;
+        this.playAddress = 0;
+        this.useCiaTimer = false; 
+        this.isIrqRoutine = false; 
+
+        this.temperature = 55.0;
+        this.cpuCyclesRemaining = 0;
+        this.lastSampleValue = 0;
+        
+        this.visualView = new Float32Array(40);
+
+        this.port.onmessage = (e) => {
+            const msg = e.data;
+            
+            if (msg.type === 'SET_TEMPERATURE') {
+                this.temperature = Math.min(75, Math.max(15, msg.value));
+                this.sid.temperature = this.temperature; 
+                return;
+            }
+
+            if (msg.isSidFile) {
+                // --- NEU: Audio-Pop Cleanup ---
+                this.lastSampleValue = 0;
+                this.dcBlock = new DCBlocker();
+
+                this.sid = new SIDChip();
+                this.sid.useJfetSaturation = false;
+                this.sid.temperature = this.temperature;
+                this.cpu = new CPU6502(this.sid);
+
+                this.cpu.reset(msg.loadAddress, msg.c64Code);
+
+                this.initAddress = msg.initAddress;
+                this.playAddress = msg.playAddress;
+                this.isIrqRoutine = false; 
+                
+                let songIndex = (msg.startSong > 0 ? msg.startSong - 1 : 0) & 0xFF;
+                this.cpu.a = songIndex;
+                this.cpu.x = songIndex; 
+                this.cpu.y = 0;
+                this.cpu.p &= ~1;
+                
+                this.useCiaTimer = ((msg.speed >> songIndex) & 1) !== 0;
+                this.cpu.jsr(this.initAddress); 
+                this.isIrqRoutine = false;
+
+                if (this.playAddress === 0) {
+                    this.playAddress = this.cpu.read(0x0314) | (this.cpu.read(0x0315) << 8); 
+                    if (this.playAddress === 0 || this.playAddress === 0xFFFF) {
+                        this.playAddress = this.cpu.read(0xFFFE) | (this.cpu.read(0xFFFF) << 8);
+                        if (this.playAddress !== 0 && this.playAddress !== 0xFFFF) {
+                            this.isIrqRoutine = true; 
+                        }
+                    }
+                    if (this.playAddress === 0 || this.playAddress === 0xFFFF) {
+                        this.playAddress = this.initAddress + 3; 
+                    }
+                }
+
+                this.cycleAccumulator = 0.0;
+                this.vblankCycles = 19705;
+                this.cpuCyclesRemaining = 0;
+                this.cpu.isIdle = true;
+
+                this.currentFrame = 0;
+                this.maxFrames = msg.length || 7500;
+                this.isPlaying = true;
+            } else if (msg.type === 'STOP_TRACK') {
+                this.isPlaying = false;
+            } else if (msg.type === 'RESUME_TRACK') {
+                this.isPlaying = true;
+            } else if (msg.type === 'CHANGE_SUBSONG') {
+                // --- NEU: Audio-Pop Cleanup ---
+                this.lastSampleValue = 0;
+                this.dcBlock = new DCBlocker();
+
+                this.sid = new SIDChip();
+                this.sid.useJfetSaturation = false;
+                this.sid.temperature = this.temperature;
+                this.cpu.sid = this.sid;
+                
+                let songIndex = (msg.frame > 0 ? msg.frame - 1 : 0) & 0xFF;
+                this.cpu.a = songIndex;
+                this.cpu.x = songIndex;
+                this.cpu.y = 0;
+                this.cpu.p &= ~1;
+                
+                this.cpu.jsr(this.initAddress);
+                
+                this.cycleAccumulator = 0.0;
+                this.vblankCycles = 19705;
+                this.cpuCyclesRemaining = 0;
+                this.cpu.isIdle = true;
+                this.currentFrame = 0;
+                this.maxFrames = msg.length || 7500;
+            }
+        };
+    }
+
+    process(inputs, outputs) {
+        const outL = outputs[0][0];
+        const outR = outputs[0].length > 1 ? outputs[0][1] : null;
+        let visualValue = 0;
+
+        for (let i = 0; i < outL.length; i++) {
+            if (!this.isPlaying) {
+                outL[i] = 0; if (outR) outR[i] = 0;
+                continue; 
+            }
+            
+            let cyclesToRun = 0;
+            if (this.isPlaying && this.playAddress > 0) {
+                this.cycleAccumulator += this.clock / sampleRate;
+                cyclesToRun = Math.floor(this.cycleAccumulator);
+                this.cycleAccumulator -= cyclesToRun;
+
+                // --- THE NATIVE CYCLE-EXACT LOCKSTEP LOOP ---
+                let sampleSum = 0;
+                for (let c = 0; c < cyclesToRun; c++) {
+                    
+                    // 1. Taktgenaue Timer & Interrupt Überwachung
+                    if (this.useCiaTimer) {
+                        this.cpu.ciaTimerA--;
+                        if (this.cpu.ciaTimerA <= 0) {
+                            let timerPeriod = (this.cpu.ram[0xDC05] << 8) | this.cpu.ram[0xDC04];
+                            if (timerPeriod === 0) timerPeriod = 19583; 
+                            this.cpu.ciaTimerA += timerPeriod;
+                            
+                            if (this.cpu.isIdle) {
+                                this.cpu.isIdle = false;
+                                if (this.isIrqRoutine) {
+                                    this.cpu.push(0xFF); this.cpu.push(0xFE); this.cpu.push(this.cpu.p); 
+                                } else {
+                                    this.cpu.push(0xFF); this.cpu.push(0xFE);
+                                }
+                                this.cpu.pc = this.playAddress;
+                                this.currentFrame = (this.currentFrame + 1) % this.maxFrames;
+                            }
+                        }
+                    } else {
+                        this.vblankCycles--;
+                        if (this.vblankCycles <= 0) {
+                            this.vblankCycles += 19705; 
+                            
+                            if (this.cpu.isIdle) {
+                                this.cpu.isIdle = false;
+                                if (this.isIrqRoutine) {
+                                    this.cpu.push(0xFF); this.cpu.push(0xFE); this.cpu.push(this.cpu.p); 
+                                } else {
+                                    this.cpu.push(0xFF); this.cpu.push(0xFE);
+                                }
+                                this.cpu.pc = this.playAddress;
+                                this.currentFrame = (this.currentFrame + 1) % this.maxFrames;
+                            }
+                        }
+                    }
+
+                    // 2. CPU-Befehle ausführen
+                    if (this.cpuCyclesRemaining <= 0) {
+                        if (!this.cpu.isIdle) {
+                            let cyclesUsed = this.cpu.step();
+                            this.cpuCyclesRemaining += cyclesUsed;
+                            if (this.cpu.pc === 0xFFFE || this.cpu.pc === 0xFFFF) {
+                                this.cpu.isIdle = true; 
+                            }
+                        }
+                    }
+                    if (this.cpuCyclesRemaining > 0) {
+                        this.cpuCyclesRemaining--;
+                    }
+                    
+                    // 3. Taktgenaue Soundchip-Aktualisierung (bei 985.248 Hz)
+                    this.sid.clock();
+                    
+                    // Boxcar-Akkumulation
+                    sampleSum += this.sid.outputSample;
+                }
+                
+                // Boxcar-Mittelwertbildung für die Web-Audio-Rate
+                let finalSample = cyclesToRun > 0 ? sampleSum / cyclesToRun : this.lastSampleValue;
+                this.lastSampleValue = finalSample;
+                
+                finalSample = this.dcBlock.process(finalSample);
+
+                outL[i] = finalSample;
+                if (outR) outR[i] = finalSample;
+                if (i === 0) visualValue = finalSample;
+            }
+        }
+
+        this.visCounter = (this.visCounter || 0) + 1;
+        if (this.visCounter % 4 === 0) {
+            let isAudible = Math.abs(visualValue) > 0.001;
+            if (isAudible || this.wasAudible) {
+                const view = this.visualView;
+                view[0] = 0; 
+                view[1] = this.isPlaying ? 1 : 0;
+                view[2] = this.currentFrame;
+                view[3] = visualValue;
+
+                for (let r = 0; r < 29; r++) {
+                    view[4 + r] = this.sid.regs[r];
+                }
+
+                view[33] = this.temperature;
+
+                for (let v = 0; v < 3; v++) {
+                    view[34 + v] = this.sid.voices[v].envelope_counter / 255.0;
+                }
+                view[37] = 0.0;
+
+                this.port.postMessage(view);
+            }
+            this.wasAudible = isAudible;
+        }
+        return true;
+    }
+}
+
+// --- HIER IST DIE REGISTRIERUNG ---
+registerProcessor('sid-standard-processor', SIDProcessor);
 ===== ./js/worklets/lib/cpu6502.js =====
 // === js/worklets/lib/cpu6502.js ===
 // =========================================================
 // 6502 CPU EMULATOR & C64 I/O INTERCEPTOR
-// Fully Restored, Cycle-Exact Timing & Zero Truncations
+// High-Performance Zero-Allocation Edition
 // =========================================================
 
 export class CPU6502 {
@@ -5789,7 +7039,7 @@ export class CPU6502 {
         this.a = 0; this.x = 0; this.y = 0;
         this.sp = 0xFF; this.p = 0x20;
         this.isIdle = true;
-        this.ciaTimerA = 19583; // CIA-Timer zurücksetzen
+        this.ciaTimerA = 19583;
     }
 
     push(val) {
@@ -5812,7 +7062,15 @@ export class CPU6502 {
         return (addr1 & 0xFF00) !== (addr2 & 0xFF00);
     }
 
+    // --- OPTIMIERUNG: Fast-Path für RAM-Zugriffe unter $D000 ---
     read(addr) {
+        if (addr < 0xD000) {
+            if (addr === 0x0001) return this.ram[0x0001];
+            return this.ram[addr];
+        }
+        if (addr > 0xDFFF) return this.ram[addr];
+        
+        // I/O Registerbereich ($D000 - $DFFF)
         if (addr === 0xD019) return this.ram[0xD019] | 0x80; 
         if (addr === 0xD012) {
             this.rasterLine = (this.rasterLine + 1) % 263;
@@ -5821,7 +7079,6 @@ export class CPU6502 {
         if (addr === 0xD011) return 0x1B | ((this.pc >> 8) & 0x80);
         if (addr === 0xDC04 || addr === 0xDC05) return Math.floor(Math.random() * 256);
         if (addr === 0xDC0D || addr === 0xDD0D) return 0x81;
-        if (addr === 0x0001) return this.ram[0x0001];
         
         if (addr === 0xD41B) return this.sid.voices[2].waveOut8Bit || 0;
         if (addr === 0xD41C) return this.sid.voices[2].env8Bit || 0;
@@ -5829,16 +7086,20 @@ export class CPU6502 {
         return this.ram[addr];
     }
 
+    // --- OPTIMIERUNG: Fast-Path für RAM-Schreibzugriffe unter $D000 ---
     write(addr, val) {
         this.ram[addr] = val;
-        if (addr === 0xD019) {
+        if (addr < 0xD000 || addr > 0xDFFF) return;
+        
+        // I/O Registerbereich
+        if (addr >= 0xD400 && addr <= 0xD41C) {
+            this.sid.writeReg(addr - 0xD400, val);
+        } else if (addr === 0xD019) {
             this.ram[0xD019] &= ~val; 
         } else if (addr === 0xDC04) {
             this.ciaTimerALow = val;
         } else if (addr === 0xDC05) {
             this.ciaTimerA = (val << 8) | this.ciaTimerALow;
-        } else if (addr >= 0xD400 && addr <= 0xD41C) {
-            this.sid.writeReg(addr - 0xD400, val);
         }
     }
 
@@ -5855,7 +7116,6 @@ export class CPU6502 {
         }
     }
 
-    // === HIER IST DIE REKONSTRUIERTE, INTERRUPT-GENAUE IRQ ROUTINE ===
     irq(addr) {
         if (addr === 0) return;
         this.push(0xFF);
@@ -6050,44 +7310,84 @@ export class CPU6502 {
         return cycles;
     }
 
+    // --- OPTIMIERUNG: Allokationsfreier, ultraschneller ALU-Befehlsdecoder ---
     handleALU(op) {
         let val = 0;
         let setVal = true;
         let cycles = 2;
 
-        if ([0x69, 0xE9, 0x29, 0x09, 0x49, 0xC9, 0xE0, 0xC0].includes(op)) {
-            val = this.read(this.pc++);
-            cycles = 2;
-        } else if ([0x65, 0xE5, 0x25, 0x05, 0x45, 0xC5, 0xE4, 0xC4, 0x24].includes(op)) {
-            val = this.read(this.zp());
-            cycles = 3;
-        } else if ([0x75, 0xF5, 0x35, 0x15, 0x55, 0xD5].includes(op)) {
-            val = this.read(this.zpX());
-            cycles = 4;
-        } else if ([0x6D, 0xED, 0x2D, 0x0D, 0x4D, 0xCD, 0xEC, 0xCC, 0x2C].includes(op)) {
-            val = this.read(this.abs());
-            cycles = 4;
-        } else if ([0x7D, 0xFD, 0x3D, 0x1D, 0x5D, 0xDD].includes(op)) {
-            let addr = this.abs();
-            let addrX = (addr + this.x) & 0xFFFF;
-            val = this.read(addrX);
-            cycles = 4 + (this.pageCrossed(addr, addrX) ? 1 : 0);
-        } else if ([0x79, 0xF9, 0x39, 0x19, 0x59, 0xD9].includes(op)) {
-            let addr = this.abs();
-            let addrY = (addr + this.y) & 0xFFFF;
-            val = this.read(addrY);
-            cycles = 4 + (this.pageCrossed(addr, addrY) ? 1 : 0);
-        } else if ([0x61, 0xE1, 0x21, 0x01, 0x41, 0xC1].includes(op)) {
-            val = this.read(this.indX());
-            cycles = 6;
-        } else if ([0x71, 0xF1, 0x31, 0x11, 0x51, 0xD1].includes(op)) {
-            let z = this.zp();
-            let addr = this.read(z) | (this.read((z+1)&0xFF) << 8);
-            let addrY = (addr + this.y) & 0xFFFF;
-            val = this.read(addrY);
-            cycles = 5 + (this.pageCrossed(addr, addrY) ? 1 : 0);
-        } else {
-            setVal = false;
+        switch (op) {
+            // Immediate (cycles = 2)
+            case 0x69: case 0xE9: case 0x29: case 0x09:
+            case 0x49: case 0xC9: case 0xE0: case 0xC0:
+                val = this.read(this.pc++);
+                cycles = 2;
+                break;
+
+            // Zero Page (cycles = 3)
+            case 0x65: case 0xE5: case 0x25: case 0x05:
+            case 0x45: case 0xC5: case 0xE4: case 0xC4:
+            case 0x24:
+                val = this.read(this.zp());
+                cycles = 3;
+                break;
+
+            // Zero Page, X (cycles = 4)
+            case 0x75: case 0xF5: case 0x35: case 0x15:
+            case 0x55: case 0xD5:
+                val = this.read(this.zpX());
+                cycles = 4;
+                break;
+
+            // Absolute (cycles = 4)
+            case 0x6D: case 0xED: case 0x2D: case 0x0D:
+            case 0x4D: case 0xCD: case 0xEC: case 0xCC:
+            case 0x2C:
+                val = this.read(this.abs());
+                cycles = 4;
+                break;
+
+            // Absolute, X (cycles = 4 + page cross)
+            case 0x7D: case 0xFD: case 0x3D: case 0x1D:
+            case 0x5D: case 0xDD: {
+                let addr = this.abs();
+                let addrX = (addr + this.x) & 0xFFFF;
+                val = this.read(addrX);
+                cycles = 4 + (this.pageCrossed(addr, addrX) ? 1 : 0);
+                break;
+            }
+
+            // Absolute, Y (cycles = 4 + page cross)
+            case 0x79: case 0xF9: case 0x39: case 0x19:
+            case 0x59: case 0xD9: {
+                let addr = this.abs();
+                let addrY = (addr + this.y) & 0xFFFF;
+                val = this.read(addrY);
+                cycles = 4 + (this.pageCrossed(addr, addrY) ? 1 : 0);
+                break;
+            }
+
+            // Indexed Indirect X (cycles = 6)
+            case 0x61: case 0xE1: case 0x21: case 0x01:
+            case 0x41: case 0xC1:
+                val = this.read(this.indX());
+                cycles = 6;
+                break;
+
+            // Indirect Indexed Y (cycles = 5 + page cross)
+            case 0x71: case 0xF1: case 0x31: case 0x11:
+            case 0x51: case 0xD1: {
+                let z = this.zp();
+                let addr = this.read(z) | (this.read((z+1)&0xFF) << 8);
+                let addrY = (addr + this.y) & 0xFFFF;
+                val = this.read(addrY);
+                cycles = 5 + (this.pageCrossed(addr, addrY) ? 1 : 0);
+                break;
+            }
+
+            default:
+                setVal = false;
+                break;
         }
 
         if (setVal) {
@@ -6314,37 +7614,88 @@ export class DynamicStaging {
 // === js/worklets/lib/sid-chip.js ===
 // ==========================================
 // MOS Technology SID 6581 Sound Chip Emulation
-// Cycle-Exact 15-Bit ADSR & Physical NMOS Transistor Waveform Mixing Model
+// Etappe 2: Physical LUT Architecture (Filter & R-2R DAC)
 // ==========================================
 
-const ADSR_RATES_S = [
-    0.006, 0.024, 0.054, 0.090, 0.150, 0.260, 0.300, 0.390,
-    0.540, 0.800, 1.500, 3.000, 4.500, 5.700, 9.000, 24.00
-];
+import { calculateWaveform8Bit } from './sid-waveforms.js';
+import { DAC_LUT, CUTOFF_LUT } from './sid-luts.js'; // --- NEU: LUTs importieren ---
 
 const ENV_ATTACK = 0, ENV_DECAY = 1, ENV_SUSTAIN = 2, ENV_RELEASE = 3;
-
-// Offizielle Hardware-Ratenperioden des SIDs in echten CPU-Zyklen
-const RATE_COUNTER_PERIOD = [
-    9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19530, 31256
-];
+const RATE_COUNTER_PERIOD = [9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19530, 31256];
+const PHASE_SCALE = 1.0 / 16777216.0;
 
 export class SIDChip {
     constructor() {
         this.regs = new Uint8Array(29);
-        this.voices = [
-            { freq: 0, pw: 2048, ctrl: 0, env: 0, phase: 0, state: ENV_RELEASE, prevGate: false, waveOut8Bit: 0, env8Bit: 0, lfsr: 0x7FFFFF, rate_counter: 0, exponential_counter: 0, envelope_counter: 0 },
-            { freq: 0, pw: 2048, ctrl: 0, env: 0, phase: 0, state: ENV_RELEASE, prevGate: false, waveOut8Bit: 0, env8Bit: 0, lfsr: 0x7FFFFF, rate_counter: 0, exponential_counter: 0, envelope_counter: 0 },
-            { freq: 0, pw: 2048, ctrl: 0, env: 0, phase: 0, state: ENV_RELEASE, prevGate: false, waveOut8Bit: 0, env8Bit: 0, lfsr: 0x7FFFFF, rate_counter: 0, exponential_counter: 0, envelope_counter: 0 }
-        ];
+        this.voices = [];
+        for (let i = 0; i < 3; i++) {
+            this.voices.push({
+                freq: 0, pw: 2048, ctrl: 0, env: 0, phase: 0,
+                state: ENV_RELEASE, prevGate: false,
+                waveOut8Bit: 0, env8Bit: 0, lfsr: 0x7FFFFF,
+                
+                // Rate-Counter als 15-Bit Up-Counter für Envelope-Freeze-Bug
+                rate_counter: 0, 
+                exponential_counter: 0, 
+                envelope_counter: 0,
+                
+                attack_period: RATE_COUNTER_PERIOD[0],
+                decay_period: RATE_COUNTER_PERIOD[0],
+                sustain_level: 0,
+                release_period: RATE_COUNTER_PERIOD[0],
+                
+                msbRisingEdge: false,
+                envDelay: 0,
+                wrapped: false,
+                floatingLevel: 0
+            });
+        }
         this.cutoff = 30; this.resonance = 0; this.filterMode = 0; this.masterVol = 0;
         this.filterLow = 0; this.filterBand = 0;
+        this._temperature = 55.0;
+        this.outputSample = 0;
+        this.useJfetSaturation = true; 
+        
+        this.g = 0;
+        this.q = 1.0;
+        this.activeCutoff = 30.0;
+        this.updateFilterParameters();
+    }
+
+    get temperature() { return this._temperature; }
+    set temperature(val) {
+        this._temperature = val;
+        this.updateFilterParameters();
+    }
+
+    updateFilterParameters() {
+        let cutoffReg = (this.regs[21] & 7) | (this.regs[22] << 3);
+        
+        // --- ETAPPE 2: 2048-Entry Cutoff LUT ---
+        // Null CPU-Last: Wir lesen den exakten Hertz-Wert direkt aus der LUT aus
+        // und wenden nur noch den thermischen Drift darauf an!
+        let baseCutoff = CUTOFF_LUT[cutoffReg];
+        
+        let thermalCoefficient = 1.0 - (this._temperature - 55.0) * 0.0035;
+        this.activeCutoff = baseCutoff * thermalCoefficient;
+        
+        if (this.activeCutoff < 30) this.activeCutoff = 30;
+        if (this.activeCutoff > 16000) this.activeCutoff = 16000;
+
+        this.g = Math.PI * this.activeCutoff / 985248;
+        
+        let resReg = this.regs[23] >> 4;
+        let normRes = resReg / 15.0;
+        let q = 1.0 - normRes * 0.92;
+        let thermalDamp = 1.0 + (this._temperature - 55.0) * 0.0015;
+        this.q = Math.min(1.0, Math.max(0.04, q * thermalDamp));
     }
 
     writeReg(reg, val) {
+        if (reg >= 29) return;
         this.regs[reg] = val;
         
-        let vIdx = Math.floor(reg / 7);
+        let vIdx = (reg / 7) | 0;
         if (vIdx < 3) {
             let ch = this.voices[vIdx];
             let base = vIdx * 7;
@@ -6357,197 +7708,365 @@ export class SIDChip {
             let gate = (ch.ctrl & 1) !== 0;
             let prevGate = (prevCtrl & 1) !== 0;
             
-            if (gate && !prevGate) ch.state = ENV_ATTACK;
-            else if (!gate && prevGate) ch.state = ENV_RELEASE;
+            // --- ETAPPE 1: ADSR Bug / Immortal Rate Counter ---
+            // Der Rate-Counter wird NIEMALS gelöscht, wenn sich das Gate ändert!
+            // Nur das Status-Flag kippt. Die Rate tickt gnadenlos weiter.
+            if (gate !== prevGate) {
+                ch.envDelay = 1; // 1-Zyklus ADSR Hardware Pipeline-Delay
+                ch.state = gate ? ENV_ATTACK : ENV_RELEASE;
+            }
             ch.prevGate = gate;
 
-            if (ch.ctrl & 8) {
-                ch.phase = 0; 
-                ch.lfsr = 0x7FFFFF;
+            if (reg === base + 5) { 
+                ch.attack_period = RATE_COUNTER_PERIOD[val >> 4];
+                ch.decay_period = RATE_COUNTER_PERIOD[val & 15];
+            } else if (reg === base + 6) { 
+                ch.sustain_level = (val >> 4) | ((val >> 4) << 4);
+                ch.release_period = RATE_COUNTER_PERIOD[val & 15];
             }
-            
         } else if (reg === 21 || reg === 22) {
-            let cutoffReg = (this.regs[21] & 7) | (this.regs[22] << 3);
-            this.cutoff = 30 + (cutoffReg * 8);
+            this.updateFilterParameters();
         } else if (reg === 23) {
-            this.resonance = (val >> 4) / 15.0;
+            this.updateFilterParameters();
         } else if (reg === 24) {
             this.filterMode = val;
             this.masterVol = (val & 15) / 15.0;
+            this.updateFilterParameters();
         }
     }
 
-    getRatePeriod(v, state) {
-        let base = v * 7;
-        let ad = this.regs[base + 5];
-        let sr = this.regs[base + 6];
-        
-        if (state === ENV_ATTACK) return RATE_COUNTER_PERIOD[ad >> 4];
-        if (state === ENV_DECAY) return RATE_COUNTER_PERIOD[ad & 15];
-        return RATE_COUNTER_PERIOD[sr & 15]; 
-    }
-
-    clockEnvelope(v, cycles) {
+    clockEnvelopeOneCycle(v) {
         let ch = this.voices[v];
-        if (ch.state === ENV_SUSTAIN) {
-            let sr = this.regs[v * 7 + 6];
-            ch.envelope_counter = (sr >> 4) | ((sr >> 4) << 4);
+
+        if (ch.envDelay > 0) {
+            ch.envDelay--;
             return;
         }
 
-        let ratePeriod = this.getRatePeriod(v, ch.state);
+        if (ch.state === ENV_SUSTAIN) {
+            ch.envelope_counter = ch.sustain_level;
+            return;
+        }
 
-        while (cycles > 0) {
-            if (ch.rate_counter <= 0) {
-                ch.rate_counter += ratePeriod; 
+        let ratePeriod = 9;
+        switch (ch.state) {
+            case ENV_ATTACK:  ratePeriod = ch.attack_period; break;
+            case ENV_DECAY:   ratePeriod = ch.decay_period; break;
+            case ENV_RELEASE: ratePeriod = ch.release_period; break;
+        }
 
-                let expPeriod = 1;
-                if (ch.state !== ENV_ATTACK) {
-                    let envVal = ch.envelope_counter;
-                    if (envVal >= 93) expPeriod = 1;
-                    else if (envVal >= 54) expPeriod = 2;
-                    else if (envVal >= 26) expPeriod = 4;
-                    else if (envVal >= 14) expPeriod = 8;
-                    else if (envVal >= 6) expPeriod = 16;
-                    else expPeriod = 30;
-                }
+        // --- ETAPPE 1: Der 15-Bit Envelope Freeze Bug ---
+        // Der Zähler ist nun ein echter 15-Bit UP-Counter (0 - 32767).
+        // Fällt die neue ratePeriod UNTER den aktuellen ch.rate_counter,
+        // übersieht die Engine den Treffer und friert die Hüllkurve ein,
+        // bis der Zähler nach 32768 Zyklen überläuft (Envelope Freeze)!
+        ch.rate_counter = (ch.rate_counter + 1) & 0x7FFF;
 
-                ch.exponential_counter++;
-                if (ch.exponential_counter >= expPeriod) {
-                    ch.exponential_counter = 0;
+        if (ch.rate_counter === ratePeriod) {
+            ch.rate_counter = 0; 
 
-                    if (ch.state === ENV_ATTACK) {
-                        ch.envelope_counter++;
-                        if (ch.envelope_counter >= 255) {
-                            ch.envelope_counter = 255;
-                            ch.state = ENV_DECAY;
-                        }
-                    } else if (ch.state === ENV_DECAY) {
-                        let sr = this.regs[v * 7 + 6];
-                        let sustainVal = (sr >> 4) | ((sr >> 4) << 4);
-                        
-                        if (ch.envelope_counter > sustainVal) {
-                            ch.envelope_counter--;
-                        } else {
-                            ch.state = ENV_SUSTAIN;
-                        }
-                    } else if (ch.state === ENV_RELEASE) {
-                        if (ch.envelope_counter > 0) {
-                            ch.envelope_counter--;
-                        }
+            let expPeriod = 1;
+            if (ch.state !== ENV_ATTACK) {
+                let envVal = ch.envelope_counter;
+                if (envVal >= 93) expPeriod = 1;
+                else if (envVal >= 54) expPeriod = 2;
+                else if (envVal >= 26) expPeriod = 4;
+                else if (envVal >= 14) expPeriod = 8;
+                else if (envVal >= 6) expPeriod = 16;
+                else expPeriod = 30;
+            }
+
+            ch.exponential_counter++;
+            if (ch.exponential_counter >= expPeriod) {
+                ch.exponential_counter = 0;
+
+                if (ch.state === ENV_ATTACK) {
+                    ch.envelope_counter++;
+                    if (ch.envelope_counter >= 255) {
+                        ch.envelope_counter = 255;
+                        ch.state = ENV_DECAY;
+                    }
+                } else if (ch.state === ENV_DECAY) {
+                    let sustainVal = ch.sustain_level;
+                    if (ch.envelope_counter > sustainVal) {
+                        ch.envelope_counter--;
+                    } else {
+                        ch.state = ENV_SUSTAIN;
+                    }
+                } else if (ch.state === ENV_RELEASE) {
+                    if (ch.envelope_counter > 0) {
+                        ch.envelope_counter--;
                     }
                 }
             }
-            
-            let step = Math.min(cycles, ch.rate_counter);
-            ch.rate_counter -= step;
-            cycles -= step;
         }
     }
 
-    synthesizeVoice(v, clock, sampleRate, cyclesToRun) {
+    synthesizeVoiceOneCycle(v) {
         let ch = this.voices[v];
 
-        // 1. Taktgenaues ADSR-Update
-        this.clockEnvelope(v, cyclesToRun);
-
-        // 2. Phasen-Akkumulator & Noise-Shift berechnen
         if ((ch.ctrl & 8) === 0) {
-            let oldAcc = Math.floor(ch.phase * 16777216.0);
-            let phaseInc = ((ch.freq * clock) / 16777216.0) / sampleRate;
-            ch.phase += phaseInc;
-            
-            let newAcc = Math.floor(ch.phase * 16777216.0);
-            ch.phase %= 1.0;
+            let oldAcc = ch.phase;
+            let newAcc = (ch.phase + ch.freq) & 0xFFFFFF;
 
-            // LFSR Noise Shift (16x f_out)
-            let oldStep = Math.floor(oldAcc / 524288) & 31;
-            let newStep = Math.floor(newAcc / 524288) & 31;
-            let shifts = (newStep - oldStep + 32) & 31;
+            let prevIdx = v === 0 ? 2 : v - 1;
+            let prevCh = this.voices[prevIdx];
+            if ((ch.ctrl & 2) !== 0 && prevCh.msbRisingEdge) newAcc = 0; 
 
-            for (let s = 0; s < shifts; s++) {
+            ch.msbRisingEdge = ((oldAcc & 0x800000) === 0) && ((newAcc & 0x800000) !== 0);
+            ch.phase = newAcc;
+
+            let oldStep = oldAcc & 0x080000;
+            let newStep = ch.phase & 0x080000;
+            if (!oldStep && newStep) {
                 let bit = ((ch.lfsr >> 22) ^ (ch.lfsr >> 17)) & 1;
                 ch.lfsr = ((ch.lfsr << 1) & 0x7FFFFF) | bit;
             }
-        }
-
-        // Grundwellenformen als kontinuierliche Floats (0.0 bis 1.0) berechnen
-        let tri = ch.phase < 0.5 ? ch.phase * 2.0 : (1.0 - ch.phase) * 2.0;
-        let saw = 1.0 - ch.phase;
-        let pulseHigh = ch.phase > (ch.pw / 4095.0);
-        let noiseHigh = ((ch.lfsr >> 22) & 1) === 1;
-
-        let waveOutVal = 0;
-        let hasWave = false;
-
-        let hasTri = (ch.ctrl & 16) !== 0;
-        let hasSaw = (ch.ctrl & 32) !== 0;
-        let hasPulse = (ch.ctrl & 64) !== 0;
-        let hasNoise = (ch.ctrl & 128) !== 0;
-
-        // === REALISTISCHES PHYSICAL-MODEL DER ANALOGEN NMOS-WAVEFORM-MISCHUNG ===
-        // Emuliert die gegenseitige Spannungs- und Schwellenstrombelastung der Transistoren
-        if (hasTri && hasSaw && hasPulse) {
-            // Tri + Saw + Pulse (0x70)
-            let trisaw = tri * saw * 1.4;
-            if (trisaw > 1.0) trisaw = 1.0;
-            let val = pulseHigh ? (trisaw * 0.78 + 0.22) : (trisaw * 0.12);
-            waveOutVal = val;
-            hasWave = true;
-        } else if (hasTri && hasSaw) {
-            // Tri + Saw (0x30): Das Dreieck moduliert die Gate-Spannung des Sägezahn-Kanals
-            let val = tri * saw * 1.4;
-            if (val > 1.0) val = 1.0;
-            waveOutVal = val;
-            hasWave = true;
-        } else if (hasTri && hasPulse) {
-            // Tri + Pulse (0x50): Gate-Sinking mit 12% analogem Leckstrom (Leakage)
-            let val = pulseHigh ? (tri * 0.78 + 0.22) : (tri * 0.12);
-            waveOutVal = val;
-            hasWave = true;
-        } else if (hasSaw && hasPulse) {
-            // Saw + Pulse (0x60)
-            let val = pulseHigh ? (saw * 0.78 + 0.22) : (saw * 0.12);
-            waveOutVal = val;
-            hasWave = true;
-        } else if (hasNoise && (hasTri || hasSaw || hasPulse)) {
-            // Noise moduliert Trägerwellen analog als ultraschneller Torschalter
-            let carrier = 1.0;
-            if (hasTri) carrier = tri;
-            else if (hasSaw) carrier = saw;
-            else if (hasPulse) carrier = pulseHigh ? 1.0 : 0.0;
-            
-            let val = noiseHigh ? (carrier * 0.78 + 0.22) : (carrier * 0.12);
-            waveOutVal = val;
-            hasWave = true;
         } else {
-            // Einzele-Wellenformen (Saubere float-basierte Auswertung)
-            if (hasTri) {
-                waveOutVal = tri;
-                hasWave = true;
-            } else if (hasSaw) {
-                waveOutVal = saw;
-                hasWave = true;
-            } else if (hasPulse) {
-                waveOutVal = pulseHigh ? 1.0 : 0.0;
-                hasWave = true;
-            } else if (hasNoise) {
-                // reSID-konformer 8-Bit-Abgriff aus den obersten LFSR-Zellen
-                waveOutVal = ((ch.lfsr >> 15) & 0xFF) / 255.0; 
-                hasWave = true;
-            }
+            ch.msbRisingEdge = false;
         }
 
-        if (!hasWave) waveOutVal = 0.0; 
+        let ringMSB = 0;
+        if ((ch.ctrl & 4) !== 0) { 
+            let prevIdx = v === 0 ? 2 : v - 1;
+            let prevCh = this.voices[prevIdx];
+            ringMSB = (prevCh.phase >> 23) & 1;
+        }
 
-        // Speichern für Hubbard-Hack und Visualizer
-        ch.waveOut8Bit = Math.floor(waveOutVal * 255);
+        ch.waveOut8Bit = calculateWaveform8Bit(ch, ch.ctrl, ch.phase, ch.pw, ch.lfsr, ringMSB);
         ch.env8Bit = ch.envelope_counter;
 
-        // Bipolare Skalierung (-1.0 bis 1.0) multipliziert mit dem exponentiellen ADSR-Wert
-        let waveOutFloat = (waveOutVal * 2.0) - 1.0;
-        return waveOutFloat * (ch.envelope_counter / 255.0);
+        // --- ETAPPE 2: 256-Entry DAC LUT ---
+        // Statt fehleranfälliger Mathematik holen wir uns die physikalischen,
+        // bitgewichteten Ausgangswerte direkt aus der generierten 6581 R-2R Leiter-Tabelle!
+        let envDac = DAC_LUT[ch.env8Bit];
+        let waveDac = DAC_LUT[ch.waveOut8Bit];
+
+        let waveOutFloat = (waveDac * 2.0) - 1.0;
+        return waveOutFloat * envDac;
     }
+
+      clock() {
+        for (let v = 0; v < 3; v++) {
+            this.clockEnvelopeOneCycle(v);
+        }
+
+        let voice0 = this.synthesizeVoiceOneCycle(0);
+        let voice1 = this.synthesizeVoiceOneCycle(1);
+        let voice2 = this.synthesizeVoiceOneCycle(2);
+
+        let filteredSum = 0;
+        let unfilteredSum = 0;
+
+        const isVoice3Off = (this.filterMode & 128) !== 0;
+
+        if (this.regs[23] & 1) filteredSum += voice0; else unfilteredSum += voice0;
+        if (this.regs[23] & 2) filteredSum += voice1; else unfilteredSum += voice1;
+
+        if (!isVoice3Off) {
+            if (this.regs[23] & 4) filteredSum += voice2; else unfilteredSum += voice2;
+        }
+
+        let g = this.g;
+        let q = this.q;
+        
+        if (this.activeCutoff < 800.0) {
+            let damp = (800.0 - this.activeCutoff) / 800.0; 
+            q += damp * 0.55; 
+        }
+
+        let h = filteredSum - this.filterLow;
+        let hp = (h - q * this.filterBand) / (1.0 + g * (g + q));
+        let bp = this.filterBand + g * hp;
+        let lp = this.filterLow + g * bp;
+        
+        this.filterLow = lp;
+        
+        // --- PHASE 3: JFET EVEN-ORDER HARMONICS (Die dunkle Magie) ---
+        if (this.useJfetSaturation) {
+            // 1. Asymmetrisches Soft-Clipping (Positiv clippt härter als negativ)
+            let b = bp;
+            if (b > 0) b = Math.tanh(b / 1.5) * 1.5; 
+            else b = Math.tanh(b / 4.0) * 4.0;
+            
+            // 2. Erzeugung von geradzahligen Obertönen (Even Harmonics)
+            // Das Quadrat (bp * bp) addiert eine asymmetrische Delle in die Welle.
+            // Dies erzeugt warme "Röhren"-Sättigung und einen massiven DC-Offset, 
+            // den der nachfolgende DCBlocker im Worklet souverän wieder ausbügelt!
+            b += 0.12 * bp * bp; 
+            
+            this.filterBand = b;
+        } else {
+            this.filterBand = bp / (1.0 + Math.abs(bp) * 0.15); 
+        }
+        
+        if (this.filterBand > 4.0) this.filterBand = 4.0;
+        if (this.filterBand < -4.0) this.filterBand = -4.0;
+        if (this.filterLow > 4.0) this.filterLow = 4.0;
+        if (this.filterLow < -4.0) this.filterLow = -4.0;
+
+        let filterOut = 0;
+        if (this.filterMode & 16) filterOut += this.filterLow; 
+        if (this.filterMode & 32) filterOut += this.filterBand; 
+        if (this.filterMode & 64) filterOut += hp; 
+
+        let leakage = filteredSum * 0.11;
+        let filteredMix = filterOut + leakage;
+        let finalMix = (unfilteredSum + filteredMix) / 3.0;
+
+        let dcLeakage = (this.masterVol - 0.5) * 1.5;
+        this.outputSample = (finalMix * this.masterVol) + dcLeakage;
+    }
+}
+===== ./js/worklets/lib/sid-luts.js =====
+// === js/worklets/lib/sid-luts.js ===
+// =========================================================
+// MOS 6581 HARDWARE LOOKUP TABLES (LUTs)
+// Pre-computed physical anomalies, bit-weight errors & non-linear curves
+// =========================================================
+
+export const DAC_LUT = new Float32Array(256);
+export const CUTOFF_LUT = new Float32Array(2048);
+export const PWM_LUT = new Uint16Array(4096);
+
+// 1. GENERATE 6581 DAC CURVE (256 Entries)
+// Simuliert die fehlerhaften Widerstände des analogen R-2R Leiter-Netzwerks auf dem Die.
+// Anstatt einer reinen Parabel gewichten wir jedes Bit mit winzigen Hardware-Toleranzen.
+const bitWeights = [
+    1.00,   // Bit 0
+    2.01,   // Bit 1
+    3.98,   // Bit 2
+    8.05,   // Bit 3
+    15.90,  // Bit 4
+    32.15,  // Bit 5
+    63.70,  // Bit 6
+    128.50  // Bit 7
+];
+let maxWeight = 0;
+for (let b of bitWeights) maxWeight += b;
+
+for (let i = 0; i < 256; i++) {
+    let sum = 0;
+    for (let b = 0; b < 8; b++) {
+        if (i & (1 << b)) sum += bitWeights[b];
+    }
+    let v = sum / maxWeight;
+    // Zusätzlich: Der charakteristische, leichte Bowing-Effekt des Ausgangsverstärkers
+    DAC_LUT[i] = v + 0.12 * v * (1.0 - v);
+}
+
+// 2. GENERATE 6581 FILTER CUTOFF CURVE (2048 Entries)
+// Bildet die gemessene, krumme FET-Kennlinie des originalen Filters nach:
+// Flaches Plateau -> harter Knick -> massiver Sprung -> Sättigung im High-End
+for (let i = 0; i < 2048; i++) {
+    let norm = i / 2047.0;
+    let hz;
+    
+    if (norm < 0.2) {
+        hz = 30.0 + norm * 500.0; // Flat start (Plateau)
+    } else if (norm < 0.6) {
+        hz = 130.0 + Math.pow((norm - 0.2) / 0.4, 2.0) * 3000.0; // Sharp knee (Knick)
+    } else if (norm < 0.9) {
+        hz = 3130.0 + Math.pow((norm - 0.6) / 0.3, 1.5) * 8000.0; // Jump (Sprung)
+    } else {
+        hz = 11130.0 + ((norm - 0.9) / 0.1) * 4870.0; // Saturation (Top end)
+    }
+    
+    if (hz < 30) hz = 30;
+    if (hz > 16000) hz = 16000;
+    CUTOFF_LUT[i] = hz;
+}
+
+// 3. GENERATE PWM COMPARATOR OFFSET (4096 Entries)
+// Der analoge Komparator des 6581 ist asymmetrisch. Eine programmierte 50% Pulswelle (0x800)
+// ist in der Hardware leicht verschoben, was Sweeps charakteristisch unrund macht.
+for (let i = 0; i < 4096; i++) {
+    // Hardware DC-Offset von ca. 1.8% in die Vergleichslogik injizieren
+    let shifted = i + 76; 
+    if (shifted > 4095) shifted = 4095;
+    PWM_LUT[i] = shifted;
+}
+===== ./js/worklets/lib/sid-waveforms.js =====
+// === js/worklets/lib/sid-waveforms.js ===
+// =========================================================
+// MOS 6581 WAVEFORM GENERATOR & BIT-LOGIC
+// Phase 3 (Dark Magic): Illegal Opcodes & Analog Wire-Shorts Matrix
+// =========================================================
+
+import { PWM_LUT } from './sid-luts.js';
+
+export function calculateWaveform8Bit(ch, ctrl, phase24, pw12, lfsr23, ringMSB) {
+    let out = 0xFF; 
+    let hasWave = false;
+
+    // 1. Die vier Basis-Wellenformen (Hardware-Quantisiert)
+    if (ctrl & 16) { 
+        let bit23 = (phase24 >> 23) & 1;
+        if (ctrl & 4) bit23 ^= ringMSB;
+
+        let tri12 = (phase24 >> 11) & 0xFFF;
+        if (bit23) tri12 = (~tri12) & 0xFFF;
+        
+        out &= (tri12 >> 4);
+        hasWave = true;
+    }
+
+    if (ctrl & 32) { 
+        out &= (phase24 >> 16) & 0xFF;
+        hasWave = true;
+    }
+
+    if (ctrl & 64) { 
+        let testPhase = (phase24 >> 12) & 0xFFF;
+        let effectivePw = PWM_LUT[pw12];
+        out &= (testPhase <= effectivePw) ? 0xFF : 0x00;
+        hasWave = true;
+    }
+
+    if (ctrl & 128) { 
+        let noiseOut = ((lfsr23 & 0x400000) >> 15) | 
+                       ((lfsr23 & 0x100000) >> 14) | 
+                       ((lfsr23 & 0x010000) >> 11) | 
+                       ((lfsr23 & 0x002000) >>  9) | 
+                       ((lfsr23 & 0x000800) >>  8) | 
+                       ((lfsr23 & 0x000080) >>  5) | 
+                       ((lfsr23 & 0x000010) >>  3) | 
+                       ((lfsr23 & 0x000004) >>  2);  
+        out &= noiseOut;
+        hasWave = true;
+    }
+
+    // --- PHASE 3: ILLEGAL OPCODES (ANALOG DIE SHORTS) ---
+    // Wenn mehrere Wellen kombiniert werden, entsteht ein physischer Kurzschluss.
+    // Die schwächeren Pull-Up-Widerstände kollabieren, die Amplitude bricht ein
+    // und erzeugt einen spezifischen Gleichspannungs-Sprung (DC-Offset).
+    if (hasWave) {
+        let waveCombine = ctrl & 0x70; // Filtert Tri (16), Saw (32), Pulse (64)
+        
+        if (waveCombine === 0x30) { // Tri + Saw
+            // Amplitude bricht stark ein, Signal driftet nach oben
+            out = (out >> 1) + 0x18; 
+        } 
+        else if (waveCombine === 0x50) { // Tri + Pulse
+            // Dreieck wird vom Puls massiv verzerrt und gestaucht
+            out = (out >> 1) + 0x20;
+        } 
+        else if (waveCombine === 0x60) { // Saw + Pulse
+            out = (out >> 1) + 0x10;
+        } 
+        else if (waveCombine === 0x70) { // Tri + Saw + Pulse
+            // Totaler Kurzschluss: Signal flacht fast komplett ab (extrem leise)
+            out = (out >> 2) + 0x28;
+        }
+
+        ch.floatingLevel = out;
+    } else {
+        // Floating DAC: Zieht sich langsam in Richtung 0x18 Leckstrom
+        ch.floatingLevel += (0x18 - ch.floatingLevel) * 0.0002;
+        out = Math.round(ch.floatingLevel);
+    }
+
+    return out;
 }
 ===== ./js/worklets/lib/ym-visualizer.js =====
 // === js/worklets/lib/ym-visualizer.js ===
@@ -6601,16 +8120,18 @@ export class YMVisualizer {
 export const workletRegistry = {
     atari: [
         { id: 'ym-exact', name: 'YM2149 (PolyBLEP Anti-Aliasing)', cpu: 2, file: 'js/worklets/atari/ym-exact.js', processor: 'ym-exact-processor' },
-        // Verweis auf die umbenannte ym-standard.js aktualisiert!
         { id: 'ym-standard', name: 'YM2149 (Standard)', cpu: 1, file: 'js/worklets/atari/ym-standard.js', processor: 'ym-processor' },
         { id: 'ym-fantasy', name: 'YM2149 (Chiptunes Fantasy)', cpu: 4, file: 'js/worklets/atari/ym-fantasy.js', processor: 'ym-fantasy-processor' },
         { id: 'ym-bladerunner', name: 'YM2149 (Blade Runner Cinematic)', cpu: 4, file: 'js/worklets/atari/ym-bladerunner.js', processor: 'ym-bladerunner-processor' }
     ],
     c64: [
-        { id: 'sid-6581', name: 'MOS SID 6581 (Classic)', cpu: 3, file: 'js/worklets/c64/sid-worklet.js', processor: 'sid-processor' }
+        // --- NEU: Aufgeteilt in Exact (Default) und Standard ---
+        { id: 'sid-exact', name: 'MOS SID 6581 (Analog Dirt & 1MHz AAF)', cpu: 4, file: 'js/worklets/c64/sid-exact.js', processor: 'sid-exact-processor' },
+        { id: 'sid-standard', name: 'MOS SID 6581 (Digital Clean)', cpu: 2, file: 'js/worklets/c64/sid-standard.js', processor: 'sid-standard-processor' }
     ],
     amiga: [
-        { id: 'paula-standard', name: 'MOS Paula 8364', cpu: 2, file: 'js/worklets/amiga/paula-worklet.js', processor: 'paula-processor' }
+        { id: 'paula-exact', name: 'MOS Paula 8364 (Analog Dirt & Sync)', cpu: 3, file: 'js/worklets/amiga/paula-exact.js', processor: 'paula-exact-processor' },
+        { id: 'paula-standard', name: 'MOS Paula 8364 (Digital Clean)', cpu: 2, file: 'js/worklets/amiga/paula-standard.js', processor: 'paula-standard-processor' }
     ]
 };
 ===== ./manifest.json =====
@@ -6716,29 +8237,59 @@ export const jesterTrack = {
 // === tracks/amiga/mods.js ===
 // ==========================================
 // AMIGA MODS PLAYLIST INTERFACE
+// Curated 5-Legendary Showcase Edition
 // ==========================================
 
 import { loadModFile } from '../../js/parsers/mod-parser.js';
 import { loadXmFile } from '../../js/parsers/xm-parser.js'; 
 
 const myModFiles = [
-    "ELYSIUM.MOD",
+    "ELYSIUM.MOD",          // Jester / Sanity (1)
+    "space_debris.xm",      // Captain (2)
+    "GSLINGER.MOD",         // Jogeir Liljedahl (3)
+    "agony_intro.mod",      // Jochen Hippel (4)
+    "turrican_2_title.xm",  // Chris Huelsbeck (5)
     "blood_money_title.mod",
-    "agony_intro.mod",
     "moongazr.mod",
-    "GSLINGER.MOD",
     "immortal.mod",
-    "space_debris.xm",
-    "turrican_2_title.xm" 
+    "lotus2-title.mod",
+    "DEADLOCK.XM"
 ];
+
+const composerMetadata = {
+    "ELYSIUM.MOD": `
+        <h3>[ COMPOSER SPOTLIGHT: JESTER (SANITY) ]</h3>
+        <p><strong>Elysium</strong> ist eine der wegweisendsten Demoscene-Hymnen aller Zeiten, komponiert 1992 von <strong>Volker Tripp (Jester)</strong> für die Sanity-Megademo <em>Interference</em>. Der Track zeigt die reinste Form des 4-Spur ProTracker-Handwerks: Extrem sauberes 8-Bit Sample-Slicing, tighte perkussive Beatzuweisung und jazzige, synkopierte Rhythmen, die ohne jegliche Pitch-Hüllkurven allein durch exzellente Volumensteuerung und Micro-Slides geformt wurden.</p>
+    `,
+    "space_debris.xm": `
+        <h3>[ COMPOSER SPOTLIGHT: CAPTAIN (MARKUS KAARLONEN) ]</h3>
+        <p>Komponiert im Jahr 1993, gilt <strong>Space Debris</strong> von <strong>Markus Kaarlonen (Captain)</strong> als melodisches Kronjuwel der Demoszene. Der Track nutzt dichte, spacige Synthesizer-Pads und schwebende Portamentos (Effekt <code>0x03</code>), um eine beinahe dreidimensionale akustische Bühne aufzubauen. Es ist das perfekte Beispiel für den Epochenwechsel von rauen Chiptunes zu komplexeren, atmosphärischen Tracker-Arrangements.</p>
+    `,
+    "GSLINGER.MOD": `
+        <h3>[ COMPOSER SPOTLIGHT: JOGEIR LILJEDAHL ]</h3>
+        <p><strong>Jogeir Liljedahl</strong> gilt als einer der virtuosesten Sound-Hacker der Amiga-Ära. Mit <strong>Guitar Slinger</strong> (1994) vollbrachte er das Unmögliche: Er zwang Paula dazu, das Jaulen, verzerrende Feedback und expressive Vibrato einer elektrischen E-Gitarre auf nur 4 Spuren täuschend echt zu emulieren. Dies gelingt durch die exzessive Nutzung von Sample-Offsets (Effekt <code>0x09</code>) und rasanten Micro-Pitch-Bends.</p>
+    `,
+    "agony_intro.mod": `
+        <h3>[ COMPOSER SPOTLIGHT: JOCHEN HIPPEL / MAD MAX ]</h3>
+        <p>Das legendäre Titelthema des Psygnosis-Spiels <strong>Agony</strong> (1992) ist ein Meisterwerk der symphonischen Spielmusik. Ursprünglich von <strong>Jochen Hippel</strong> (Mad Max) komponiert und von Jogeir Liljedahl verfeinert, verbindet es melancholische Piano-Soli mit getragenen Streichern. Unser phasenstarres Sub-Sample-Timing sorgt hier dafür, dass die schnellen Piano-Akkorde und Triller absolut präzise und glasklar abgemischt werden.</p>
+    `,
+    "turrican_2_title.xm": `
+        <h3>[ COMPOSER SPOTLIGHT: CHRIS HUELSBECK ]</h3>
+        <p>Der legendäre Soundtrack zu <strong>Turrican II: The Final Fight</strong> (1991) von <strong>Chris Hülsbeck</strong>. Diese 7-Kanal-Konvertierung demonstriert das volle Spektrum unseres emulierten Paula-Kerns: Epische, breit panned Bläser, butterweiche Synthesizer-Glides (Compatible Gxx) und druckvolle Percussions. Dank der präzisen 16-Bit -> 8-Bit PCM-Konvertierung entfaltet sich die klassische Hülsbeck-Dynamik ohne kratziges Emulator-Rauschen.</p>
+    `
+};
 
 export const externalModTracks = myModFiles.map((filename, index) => {
     const isXm = filename.toLowerCase().endsWith('.xm');
     const label = isXm ? "FASTTRACKER" : "PROTRACKER";
+    const metaInfo = composerMetadata[filename] || `
+        <h3>[ CLASSIC AMIGA MODULE ]</h3>
+        <p>Ein historisches Amiga-Tracker-Dokument. Geladen und emuliert direkt im RAM des Webbrowsers über unseren maßgeschneiderten, phasenstarres MOS Paula 8364 Core.</p>
+    `;
 
     return {
-        title: `${index + 1}. LOAD ${label}: ${filename}`, // Index auf 1-basiert korrigiert!
-        composerInfo: ``,
+        title: `${index + 1}. LOAD ${label}: ${filename}`,
+        composerInfo: metaInfo,
         generator: function() { return []; },
         loadAsync: async function() {
             if (isXm) {
@@ -6874,33 +8425,80 @@ export const hippelTrack = {
 // === tracks/c64/external.js ===
 // ==========================================
 // C64 Jukebox Playlist Registry
+// Curated Legendary Showcase Edition (incl. MoN)
 // ==========================================
 
 import { loadSidFile } from '../../js/parsers/sid-parser.js';
 
 const mySidFiles = [
-    "Commando.sid",
+    "Commando.sid",                   // 1. Rob Hubbard
+    "Wizball.sid",                    // 2. Martin Galway
+    "Great_Giana_Sisters_PSID.sid",   // 3. Chris Hülsbeck
+    "Bionic_Commando.sid",            // 4. Tim Follin
+    "Last_Ninja.sid",                 // 5. Ben Daglish & Anthony Lees
+    "Cybernoid_II.sid",               // 6. Jeroen Tel
+    "Supremacy.sid",                  // 7. Jeroen Tel
+    "RoboCop_3.sid",                  // 8. Jeroen Tel
+    "Myth.sid",                       // 9. Jeroen Tel
     "Monty_on_the_Run.sid",
     "Delta.sid",
-    "Wizball.sid",
-    "Great_Giana_Sisters.sid",
     "To_Be_on_Top_PSID.sid",
     "Rambo_First_Blood_Part_II.sid",
     "Mega_Apocalypse_PSID.sid",
-    "Bionic_Commando.sid",            // David Whittaker / Tim Follin (1988)
-    "Last_Ninja.sid",                 // Ben Daglish / Anthony Lees (1987)
-    "Miami_Vice.sid",                 // Jan Hammer / Martin Galway (1986)
-    "Way_of_the_Tiger.sid",           // Ben Daglish (1986)
-    "Platoon.sid",                    // Jonathan Dunn (1988)
-    "Compilation_I.sid",              // Chris Hülsbeck (1989)
-    "Compilation_II.sid"              // Chris Hülsbeck (1989)
+    "Miami_Vice.sid",                 
+    "Way_of_the_Tiger.sid",           
+    "Platoon.sid",                    
+    "Compilation_I.sid",              
+    "Compilation_II.sid"              
 ];
 
-// Automatische Generierung der Jukebox-Einträge
+const composerMetadata = {
+    "Commando.sid": `
+        <h3>[ COMPOSER SPOTLIGHT: ROB HUBBARD ]</h3>
+        <p><strong>Rob Hubbard</strong> ist der unangefochtene Rockgott des C64. Als er 1985 den Soundtrack zum Arcade-Port <em>Commando</em> ablieferte, veränderte er die Spielmusik für immer. Anstatt die von Commodore mitgelieferten, trägen Basic-Routinen zu nutzen, schrieb Hubbard seinen eigenen pfeilschnellen Maschinencode-Treiber.</p>
+        <p><strong>DSP-Fokus:</strong> Achten Sie auf die peitschenden, kratzigen Lead-Gitarren. Diese entstehen durch aggressive <strong>Oszillator-Synchronisation (Hard-Sync)</strong>. Unser Core berechnet hierbei die Phase exakt auf der MSB-Flanke (Bit 23), wodurch dieser ikonische, beißende Oberton-Riss entsteht.</p>
+    `,
+    "Wizball.sid": `
+        <h3>[ COMPOSER SPOTLIGHT: MARTIN GALWAY ]</h3>
+        <p>Wenn Hubbard der Rocker war, dann war <strong>Martin Galway</strong> der Pink Floyd der Chiptunes. Sein Soundtrack zu <em>Wizball</em> (1987) ist episch, atmosphärisch und von langsamen, organischen Filter-Sweeps geprägt.</p>
+        <p><strong>DSP-Fokus:</strong> Galway war der Meister des "Floating DAC"-Hacks. In diesem Track (und im Highscore-Theme) nutzt er das Master-Volume-Register <code>$D418</code>, um digitale Rhythmus-Samples auszugeben. Unsere Engine fängt dieses Gleichspannungs-Leck (DC-Offset) ab und decodiert die 4-Bit-Samples glasklar in den Master-Out.</p>
+    `,
+    "Great_Giana_Sisters_PSID.sid": `
+        <h3>[ COMPOSER SPOTLIGHT: CHRIS HUELSBECK ]</h3>
+        <p>Bevor er den Amiga dominierte, zeigte <strong>Chris Hülsbeck</strong> auf dem C64 seine melodische Genialität. <em>The Great Giana Sisters</em> (1987) beweist, wie man mit nur drei Stimmen komplette orchestrale Popleader aufbaut.</p>
+        <p><strong>DSP-Fokus:</strong> Hören Sie genau auf den legendären, perlenden Lead-Synthesizer. Er basiert auf <strong>Ring-Modulation</strong> (XOR-Bit-Kopplung) zwischen Dreieck- und Rechteck-Oszillator. Im Hintergrund murmelt ein fetter, analog gefilterter PWM-Bass, dessen Resonanz durch unser JFET-Transistor-Modell weich und warm bei extrem tiefen Frequenzen komprimiert wird.</p>
+    `,
+    "Bionic_Commando.sid": `
+        <h3>[ COMPOSER SPOTLIGHT: TIM FOLLIN ]</h3>
+        <p><strong>Tim Follin</strong> war der absolute Wahnsinnige unter den C64-Codern. Seine Soundtracks klingen eher nach Progressive-Metal-Alben, die auf einer CPU gerendert wurden. Er strapazierte den 6502-Prozessor so stark, dass bei seinen Routinen oft kaum noch CPU-Zeit für das eigentliche Spiel übrig blieb.</p>
+        <p><strong>DSP-Fokus:</strong> Follin nutzt extrem komplexe "Illegal Waveforms" (z. B. Sägezahn + Puls + Dreieck gleichzeitig) und spielt mit Phaser-ähnlichen Effekten durch engmaschige Timer-Interrupts. Unser 1-MHz Lockstep-Mischer verarbeitet diese brutalen Timer-Hacks auf die Mikrosekunde genau.</p>
+    `,
+    "Last_Ninja.sid": `
+        <h3>[ COMPOSER SPOTLIGHT: BEN DAGLISH & ANTHONY LEES ]</h3>
+        <p>Der Soundtrack zu <em>The Last Ninja</em> (1987) kombinierte traditionelle asiatische Melodie-Skalen mit harten 80er-Jahre Synthesizer-Beats. Er gilt bis heute als einer der längsten, abwechslungsreichsten und meistverkauften Game-Soundtracks aller Zeiten.</p>
+        <p><strong>DSP-Fokus:</strong> Die extrem engen und perkussiven Hüllkurven (ADSR) in diesem Track demonstrieren den berüchtigten "ADSR Pipeline Delay Bug" des SID-Chips perfekt. Unser Core friert die Hüllkurven-Akkumulatoren beim Gate-Wechsel für exakt einen Taktzyklus ein, was für das nötige "Snappen" der asiatischen Trommeln sorgt.</p>
+    `,
+    "Cybernoid_II.sid": `
+        <h3>[ COMPOSER SPOTLIGHT: JEROEN TEL (MANIACS OF NOISE) ]</h3>
+        <p><strong>Jeroen Tel</strong> definierte in den späten 80ern mit der Gruppe <em>Maniacs of Noise (MoN)</em> den ultimativen "Heavy"-Sound des C64. Seine Tracks (wie Cybernoid II, Myth oder Supremacy) sind berühmt für drückende, sub-bassige Kicks und unglaublich präsente, synthetische Snare-Drums.</p>
+        <p><strong>DSP-Fokus:</strong> Tel trieb die analogen Grenzen des SID auf die Spitze. Er nutzte massiv kombinierte Wellenformen (sogenannte <em>Illegal Opcodes</em> wie Dreieck + Rechteck + Noise). Da unsere Engine diese Kombinationen nicht mehr fließkomma-mathematisch berechnet, sondern die echten Kurzschlüsse der DAC-Leitungen auf dem Silizium über Bitweise-Logik (Wire-AND) nachbildet, krachen diese Drums nun mit ihrer vollen, dreckigen Original-Wucht durch die Lautsprecher.</p>
+    `
+};
+
+// Verwende die Cybernoid-Beschreibung für alle Jeroen Tel Tracks als Referenz
+composerMetadata["Supremacy.sid"] = composerMetadata["Cybernoid_II.sid"];
+composerMetadata["RoboCop_3.sid"] = composerMetadata["Cybernoid_II.sid"];
+composerMetadata["Myth.sid"] = composerMetadata["Cybernoid_II.sid"];
+
 export const externalSidTracks = mySidFiles.map((filename, index) => {
+    const metaInfo = composerMetadata[filename] || `
+        <h3>[ CLASSIC C64 SID ]</h3>
+        <p>Ein historisches C64-Tracker-Dokument. Die kompilierte 6502-Maschinencode-Routine wird in Echtzeit von unserem 1-MHz Lockstep-CPU-Emulator berechnet, während der MOS 6581 Kern die analogen Wellenformen synthetisiert.</p>
+    `;
+
     return {
         title: `${index + 1}. LOAD SID: ${filename}`,
-        composerInfo: ``,
+        composerInfo: metaInfo,
         generator: function() { return []; },
         loadAsync: async function() {
             return await loadSidFile(`tracks/c64/${filename}`);
