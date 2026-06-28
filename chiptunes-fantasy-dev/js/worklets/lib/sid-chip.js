@@ -1,7 +1,7 @@
 // === js/worklets/lib/sid-chip.js ===
 // ==========================================
 // MOS Technology SID 6581 Sound Chip Emulation
-// Holy Grail Edition: 15-Bit Envelope Freeze & LUT Architecture
+// Etappe 2: Physical LUT Architecture (Filter & R-2R DAC)
 // ==========================================
 
 import { calculateWaveform8Bit } from './sid-waveforms.js';
@@ -21,6 +21,7 @@ export class SIDChip {
                 state: ENV_RELEASE, prevGate: false,
                 waveOut8Bit: 0, env8Bit: 0, lfsr: 0x7FFFFF,
                 
+                // Rate-Counter als 15-Bit Up-Counter für Envelope-Freeze-Bug
                 rate_counter: 0, 
                 exponential_counter: 0, 
                 envelope_counter: 0,
@@ -32,6 +33,7 @@ export class SIDChip {
                 
                 msbRisingEdge: false,
                 envDelay: 0,
+                wrapped: false,
                 floatingLevel: 0
             });
         }
@@ -56,7 +58,7 @@ export class SIDChip {
     updateFilterParameters() {
         let cutoffReg = (this.regs[21] & 7) | (this.regs[22] << 3);
         
-        // LUT statt Polynom: Perfekte gemessene Kennlinie
+        // --- ETAPPE 2: 2048-Entry Cutoff LUT ---
         let baseCutoff = CUTOFF_LUT[cutoffReg];
         
         let thermalCoefficient = 1.0 - (this._temperature - 55.0) * 0.0035;
@@ -92,7 +94,7 @@ export class SIDChip {
             let prevGate = (prevCtrl & 1) !== 0;
             
             if (gate !== prevGate) {
-                ch.envDelay = 1; 
+                ch.envDelay = 1; // 1-Zyklus ADSR Hardware Pipeline-Delay
                 ch.state = gate ? ENV_ATTACK : ENV_RELEASE;
                 // ACHTUNG: Rate-Counter und LFSR werden hier BEREITS in Hardware NICHT gelöscht!
             }
@@ -134,10 +136,6 @@ export class SIDChip {
             case ENV_RELEASE: ratePeriod = ch.release_period; break;
         }
 
-        // --- DER ADSR ENVELOPE FREEZE BUG ---
-        // Der Zähler ist ein fortlaufender 15-Bit LFSR-Counter. Wenn die 'ratePeriod' vom Programm 
-        // plötzlich unter den aktuellen Wert von 'rate_counter' gesetzt wird, läuft dieser 
-        // fröhlich bis 32767 hoch, bevor er überläuft. Das friert die Hüllkurve ein!
         ch.rate_counter = (ch.rate_counter + 1) & 0x7FFF;
 
         if (ch.rate_counter === ratePeriod) {
@@ -216,11 +214,9 @@ export class SIDChip {
             ringMSB = (prevCh.phase >> 23) & 1;
         }
 
-        // Hier wird nun auch 'ch' (der Kanal) übergeben, um sich 'floatingLevel' zu merken
         ch.waveOut8Bit = calculateWaveform8Bit(ch, ch.ctrl, ch.phase, ch.pw, ch.lfsr, ringMSB);
         ch.env8Bit = ch.envelope_counter;
 
-        // DAC Fehler-Tabelle für Wave und Envelope
         let envDac = DAC_LUT[ch.env8Bit];
         let waveDac = DAC_LUT[ch.waveOut8Bit];
 
@@ -264,25 +260,38 @@ export class SIDChip {
         let bp = this.filterBand + g * hp;
         let lp = this.filterLow + g * bp;
         
-        if (bp > 4.0) bp = 4.0; else if (bp < -4.0) bp = -4.0;
-        if (lp > 4.0) lp = 4.0; else if (lp < -4.0) lp = -4.0;
-
+        // SVF STATE VARIABLES MÜSSEN LINEAR BLEIBEN, SONST VERLIERT DER FILTER MASSIV AN ENERGIE!
         this.filterLow = lp;
         this.filterBand = bp;
+        
+        // Safety Clamping für extreme Resonanzen (Verhindert Filter-Explosionen bei 6502-Hacks)
+        if (this.filterBand > 4.0) this.filterBand = 4.0;
+        if (this.filterBand < -4.0) this.filterBand = -4.0;
+        if (this.filterLow > 4.0) this.filterLow = 4.0;
+        if (this.filterLow < -4.0) this.filterLow = -4.0;
 
+        // 1. Linearen Filter-Output berechnen
         let filterOut = 0;
         if (this.filterMode & 16) filterOut += this.filterLow; 
         if (this.filterMode & 32) filterOut += this.filterBand; 
         if (this.filterMode & 64) filterOut += hp; 
 
+        // --- PHASE 3: JFET EVEN-ORDER HARMONICS (Die dunkle Magie) ---
+        // Sättigung wird NUR auf das endgültige Filter-Signal angewendet (Post-Filter VCA),
+        // so bleibt die mathematische Feedback-Schleife der SVF-Kondensatoren voll intakt!
         if (this.useJfetSaturation) {
-            let satOut = filterOut;
-            if (satOut > 0) {
-                satOut = Math.tanh(satOut / 1.5) * 1.5; 
-            } else {
-                satOut = Math.tanh(satOut / 4.0) * 4.0;
-            }
-            filterOut = satOut + 0.12 * filterOut * filterOut;
+            // Asymmetrisches Soft-Clipping (Positiv clippt härter als negativ)
+            let b = filterOut;
+            if (b > 0) b = Math.tanh(b / 1.5) * 1.5; 
+            else b = Math.tanh(b / 4.0) * 4.0;
+            
+            // Erzeugung von geradzahligen Obertönen (Even Harmonics)
+            b += 0.12 * filterOut * filterOut; 
+            
+            filterOut = b;
+        } else {
+            // Sehr leichter Soft-Knee für den digitalen "Standard"-Core
+            filterOut = filterOut / (1.0 + Math.abs(filterOut) * 0.15); 
         }
 
         let leakage = filteredSum * 0.11;

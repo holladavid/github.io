@@ -1,7 +1,7 @@
 // === js/worklets/lib/sid-waveforms.js ===
 // =========================================================
 // MOS 6581 WAVEFORM GENERATOR & BIT-LOGIC
-// Phase 5: Analog Wire-Shorts Matrix & Floating DAC Drift
+// Phase 3 (Dark Magic): Illegal Opcodes & Analog Wire-Shorts Matrix
 // =========================================================
 
 import { PWM_LUT } from './sid-luts.js';
@@ -29,7 +29,7 @@ export function calculateWaveform8Bit(ch, ctrl, phase24, pw12, lfsr23, ringMSB) 
 
     if (ctrl & 64) { 
         let testPhase = (phase24 >> 12) & 0xFFF;
-        let effectivePw = PWM_LUT[pw12]; // Asymmetrische PWM LUT!
+        let effectivePw = PWM_LUT[pw12];
         out &= (testPhase <= effectivePw) ? 0xFF : 0x00;
         hasWave = true;
     }
@@ -47,7 +47,7 @@ export function calculateWaveform8Bit(ch, ctrl, phase24, pw12, lfsr23, ringMSB) 
         hasWave = true;
     }
 
-    // --- PHASE 5: ILLEGAL OPCODES & FLOATING DAC ---
+    // --- PHASE 3: ILLEGAL OPCODES (ANALOG DIE SHORTS) ---
     // Wenn mehrere Wellen kombiniert werden, entsteht ein physischer Kurzschluss.
     // Die schwächeren Pull-Up-Widerstände kollabieren, die Amplitude bricht ein
     // und erzeugt einen spezifischen Gleichspannungs-Sprung (DC-Offset).
@@ -70,13 +70,9 @@ export function calculateWaveform8Bit(ch, ctrl, phase24, pw12, lfsr23, ringMSB) 
             out = (out >> 2) + 0x28;
         }
 
-        // Noise mischt sich auf dem echten Chip anders ein, 
-        // für den Anfang ist ein reines AND mit den geschwächten Wellen aber akkurat genug.
-
-        // Wir merken uns den Pegel für den Moment, in dem die Welle abgeschaltet wird
         ch.floatingLevel = out;
     } else {
-        // Floating DAC: Atmet sanft in Richtung 0x18 Leckstrom
+        // Floating DAC: Zieht sich langsam in Richtung 0x18 Leckstrom
         ch.floatingLevel += (0x18 - ch.floatingLevel) * 0.0002;
         out = Math.round(ch.floatingLevel);
     }

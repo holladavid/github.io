@@ -31,7 +31,7 @@ for (let i = 0; i < 256; i++) {
     }
     let v = sum / maxWeight;
     // Zusätzlich: Der charakteristische, leichte Bowing-Effekt des Ausgangsverstärkers
-    DAC_LUT[i] = v + 0.15 * v * (1.0 - v);
+    DAC_LUT[i] = v + 0.12 * v * (1.0 - v);
 }
 
 // 2. GENERATE 6581 FILTER CUTOFF CURVE (2048 Entries)

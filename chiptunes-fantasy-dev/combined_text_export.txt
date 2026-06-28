@@ -6734,6 +6734,285 @@ class SIDProcessor extends AudioWorkletProcessor {
                 view[2] = this.currentFrame;
                 view[3] = visualValue;
 
+            let digiSample = 0;
+            if (this.currentDigidrum) {
+                let posInt = Math.floor(this.digiPos);
+                if (posInt >= 0 && posInt < this.currentDigidrum.length) {
+                    digiSample = this.currentDigidrum[posInt] * 2.0;
+                    this.digiPos += 7812.5 / sampleRate; 
+                } else {
+                    this.currentDigidrum = null; 
+                }
+            }
+
+            let rawOutput = ((outA * volA) + (outB * volB) + (outC * volC) + digiSample) / 4.0;
+
+            this.lastOut = rawOutput - this.lastIn + 0.995 * this.lastOut;
+            this.lastIn = rawOutput;
+            
+            let finalOutput = this.lastOut;
+
+            if (finalOutput > 1.0) finalOutput = 1.0;
+            if (finalOutput < -1.0) finalOutput = -1.0;
+
+            channelLeft[i] = finalOutput;
+            if (channelRight) channelRight[i] = finalOutput;
+            if (i === 0) currentVisualValue = finalOutput;
+        }
+
+        this.visualizer.update(this.isPlaying, this.currentFrame, currentVisualValue, this.regs, this.volA, this.volB, this.volC);
+        return true; 
+    }
+}
+
+registerProcessor('ym-processor', YMProcessor);
+===== ./js/worklets/c64/sid-exact.js =====
+// === js/worklets/c64/sid-exact.js ===
+// =========================================================
+// MOS TECHNOLOGY SID 6581 AUDIO WORKLET PROCESSOR
+// High-Fidelity Cycle-Exact Lockstep Mischer & 4-Pole Butterworth Decimation
+// Optimized 1-MHz ZDF Filter Stage
+// =========================================================
+
+import { CPU6502 } from '../lib/cpu6502.js';
+import { SIDChip } from '../lib/sid-chip.js';
+import { DCBlocker } from '../lib/dsp-utils.js';
+
+class SIDProcessor extends AudioWorkletProcessor {
+    constructor() {
+        super();
+        this.clock = 985248; // PAL C64 Clock
+        this.sid = new SIDChip();
+        
+        // Aktiviere die authentische analoge JFET-Sättigung für den Exact-Core
+        this.sid.useJfetSaturation = true;
+        
+        this.cpu = new CPU6502(this.sid);
+        this.dcBlock = new DCBlocker();
+
+        this.trackData = null;
+        this.isPlaying = false;
+        
+        this.cycleAccumulator = 0.0;
+        this.vblankCycles = 19705; 
+        this.currentFrame = 0;
+        
+        this.initAddress = 0;
+        this.playAddress = 0;
+        this.useCiaTimer = false; 
+        this.isIrqRoutine = false; 
+
+        this.temperature = 55.0;
+        this.cpuCyclesRemaining = 0;
+        
+        // --- OPTIMIERUNG: Vorberechnete Butterworth-Dämpfungen & Teiler ---
+        const fc = 18000.0; 
+        this.aaf_g = Math.tan(Math.PI * fc / this.clock);
+        const r1 = 1.847759; // Damping (1/Q1) für Stage 1
+        const r2 = 0.765366; // Damping (1/Q2) für Stage 2
+        
+        this.aaf_r1 = r1;
+        this.aaf_r2 = r2;
+        
+        // Kehrwert der ZDF-Nenner vorab berechnen, um die 1-MHz-Divisionen komplett zu eliminieren!
+        this.aaf_scale1 = 1.0 / (1.0 + this.aaf_g * (this.aaf_g + r1));
+        this.aaf_scale2 = 1.0 / (1.0 + this.aaf_g * (this.aaf_g + r2));
+        
+        this.aaf1_l = 0; this.aaf1_b = 0;
+        this.aaf2_l = 0; this.aaf2_b = 0;
+        
+        this.visualView = new Float32Array(40);
+
+        this.port.onmessage = (e) => {
+            const msg = e.data;
+            
+            if (msg.type === 'SET_TEMPERATURE') {
+                this.temperature = Math.min(75, Math.max(15, msg.value));
+                this.sid.temperature = this.temperature; 
+                return;
+            }
+
+            if (msg.isSidFile) {
+                // --- NEU: Audio-Pop Cleanup ---
+                this.aaf1_l = 0; this.aaf1_b = 0;
+                this.aaf2_l = 0; this.aaf2_b = 0;
+                this.dcBlock = new DCBlocker();
+
+                this.cpu.reset(msg.loadAddress, msg.c64Code);
+
+                this.initAddress = msg.initAddress;
+                this.playAddress = msg.playAddress;
+                this.isIrqRoutine = false; 
+                
+                let songIndex = (msg.startSong > 0 ? msg.startSong - 1 : 0) & 0xFF;
+                this.cpu.a = songIndex;
+                this.cpu.x = songIndex; 
+                this.cpu.y = 0;
+                this.cpu.p &= ~1;
+                
+                this.useCiaTimer = ((msg.speed >> songIndex) & 1) !== 0;
+                this.cpu.jsr(this.initAddress); 
+                this.isIrqRoutine = false;
+
+                if (this.playAddress === 0) {
+                    this.playAddress = this.cpu.read(0x0314) | (this.cpu.read(0x0315) << 8); 
+                    if (this.playAddress === 0 || this.playAddress === 0xFFFF) {
+                        this.playAddress = this.cpu.read(0xFFFE) | (this.cpu.read(0xFFFF) << 8);
+                        if (this.playAddress !== 0 && this.playAddress !== 0xFFFF) {
+                            this.isIrqRoutine = true; 
+                        }
+                    }
+                    if (this.playAddress === 0 || this.playAddress === 0xFFFF) {
+                        this.playAddress = this.initAddress + 3; 
+                    }
+                }
+
+                this.cycleAccumulator = 0.0;
+                this.vblankCycles = 19705;
+                this.cpuCyclesRemaining = 0;
+                this.cpu.isIdle = true;
+
+                this.currentFrame = 0;
+                this.maxFrames = msg.length || 7500;
+                this.isPlaying = true;
+            } else if (msg.type === 'STOP_TRACK') {
+                this.isPlaying = false;
+            } else if (msg.type === 'RESUME_TRACK') {
+                this.isPlaying = true;
+            } else if (msg.type === 'CHANGE_SUBSONG') {
+                // --- NEU: Audio-Pop Cleanup ---
+                this.aaf1_l = 0; this.aaf1_b = 0;
+                this.aaf2_l = 0; this.aaf2_b = 0;
+                this.dcBlock = new DCBlocker();
+
+                this.sid = new SIDChip();
+                this.sid.useJfetSaturation = true;
+                this.sid.temperature = this.temperature;
+                this.cpu.sid = this.sid;
+                
+                let songIndex = (msg.frame > 0 ? msg.frame - 1 : 0) & 0xFF;
+                this.cpu.a = songIndex;
+                this.cpu.x = songIndex;
+                this.cpu.y = 0;
+                this.cpu.p &= ~1;
+                
+                this.cpu.jsr(this.initAddress);
+                
+                this.cycleAccumulator = 0.0;
+                this.vblankCycles = 19705;
+                this.cpuCyclesRemaining = 0;
+                this.cpu.isIdle = true;
+                this.currentFrame = 0;
+                this.maxFrames = msg.length || 7500;
+            }
+        };
+    }
+
+    process(inputs, outputs) {
+        const outL = outputs[0][0];
+        const outR = outputs[0].length > 1 ? outputs[0][1] : null;
+        let visualValue = 0;
+
+        for (let i = 0; i < outL.length; i++) {
+            if (!this.isPlaying) {
+                outL[i] = 0; if (outR) outR[i] = 0;
+                continue; 
+            }
+            
+            let cyclesToRun = 0;
+            if (this.isPlaying && this.playAddress > 0) {
+                this.cycleAccumulator += this.clock / sampleRate;
+                cyclesToRun = Math.floor(this.cycleAccumulator);
+                this.cycleAccumulator -= cyclesToRun;
+
+                // --- THE NATIVE CYCLE-EXACT LOCKSTEP LOOP ---
+                for (let c = 0; c < cyclesToRun; c++) {
+                    
+                    // 1. Taktgenaue Timer & Interrupt Überwachung
+                    if (this.useCiaTimer) {
+                        this.cpu.ciaTimerA--;
+                        if (this.cpu.ciaTimerA <= 0) {
+                            let timerPeriod = (this.cpu.ram[0xDC05] << 8) | this.cpu.ram[0xDC04];
+                            if (timerPeriod === 0) timerPeriod = 19583; 
+                            this.cpu.ciaTimerA += timerPeriod;
+                            
+                            if (this.cpu.isIdle) {
+                                this.cpu.isIdle = false;
+                                if (this.isIrqRoutine) {
+                                    this.cpu.push(0xFF); this.cpu.push(0xFE); this.cpu.push(this.cpu.p); 
+                                } else {
+                                    this.cpu.push(0xFF); this.cpu.push(0xFE);
+                                }
+                                this.cpu.pc = this.playAddress;
+                                this.currentFrame = (this.currentFrame + 1) % this.maxFrames;
+                            }
+                        }
+                    } else {
+                        this.vblankCycles--;
+                        if (this.vblankCycles <= 0) {
+                            this.vblankCycles += 19705; 
+                            
+                            if (this.cpu.isIdle) {
+                                this.cpu.isIdle = false;
+                                if (this.isIrqRoutine) {
+                                    this.cpu.push(0xFF); this.cpu.push(0xFE); this.cpu.push(this.cpu.p); 
+                                } else {
+                                    this.cpu.push(0xFF); this.cpu.push(0xFE);
+                                }
+                                this.cpu.pc = this.playAddress;
+                                this.currentFrame = (this.currentFrame + 1) % this.maxFrames;
+                            }
+                        }
+                    }
+
+                    // 2. CPU-Befehle ausführen
+                    if (this.cpuCyclesRemaining <= 0) {
+                        if (!this.cpu.isIdle) {
+                            let cyclesUsed = this.cpu.step();
+                            this.cpuCyclesRemaining += cyclesUsed;
+                            if (this.cpu.pc === 0xFFFE || this.cpu.pc === 0xFFFF) {
+                                this.cpu.isIdle = true; 
+                            }
+                        }
+                    }
+                    if (this.cpuCyclesRemaining > 0) {
+                        this.cpuCyclesRemaining--;
+                    }
+                    
+                    // 3. Taktgenaue Soundchip-Aktualisierung (bei 985.248 Hz)
+                    this.sid.clock();
+                    let out = this.sid.outputSample;
+                    
+                    // 4. Butterworth Decimation mit vorbereiteter ZDF-Multiplikation (Keine Divisionen!)
+                    let hp1 = (out - this.aaf1_l - this.aaf_r1 * this.aaf1_b) * this.aaf_scale1;
+                    let bp1 = this.aaf1_b + this.aaf_g * hp1;
+                    this.aaf1_l = this.aaf1_l + this.aaf_g * bp1;
+                    this.aaf1_b = bp1;
+                    
+                    let hp2 = (this.aaf1_l - this.aaf2_l - this.aaf_r2 * this.aaf2_b) * this.aaf_scale2;
+                    let bp2 = this.aaf2_b + this.aaf_g * hp2;
+                    this.aaf2_l = this.aaf2_l + this.aaf_g * bp2;
+                    this.aaf2_b = bp2;
+                }
+                
+                let finalSample = this.dcBlock.process(this.aaf2_l);
+
+                outL[i] = finalSample;
+                if (outR) outR[i] = finalSample;
+                if (i === 0) visualValue = finalSample;
+            }
+        }
+
+        this.visCounter = (this.visCounter || 0) + 1;
+        if (this.visCounter % 4 === 0) {
+            let isAudible = Math.abs(visualValue) > 0.001;
+            if (isAudible || this.wasAudible) {
+                const view = this.visualView;
+                view[0] = 0; 
+                view[1] = this.isPlaying ? 1 : 0;
+                view[2] = this.currentFrame;
+                view[3] = visualValue;
+
                 for (let r = 0; r < 29; r++) {
                     view[4 + r] = this.sid.regs[r];
                 }
@@ -7614,10 +7893,11 @@ export class DynamicStaging {
 // === js/worklets/lib/sid-chip.js ===
 // ==========================================
 // MOS Technology SID 6581 Sound Chip Emulation
-// Phase 4: Non-linear DAC Crunch, Asymmetric JFETs & FET-LUT Polynomial
+// Etappe 2: Physical LUT Architecture (Filter & R-2R DAC)
 // ==========================================
 
 import { calculateWaveform8Bit } from './sid-waveforms.js';
+import { DAC_LUT, CUTOFF_LUT } from './sid-luts.js'; // --- NEU: LUTs importieren ---
 
 const ENV_ATTACK = 0, ENV_DECAY = 1, ENV_SUSTAIN = 2, ENV_RELEASE = 3;
 const RATE_COUNTER_PERIOD = [9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19530, 31256];
@@ -7632,14 +7912,21 @@ export class SIDChip {
                 freq: 0, pw: 2048, ctrl: 0, env: 0, phase: 0,
                 state: ENV_RELEASE, prevGate: false,
                 waveOut8Bit: 0, env8Bit: 0, lfsr: 0x7FFFFF,
-                rate_counter: 0, exponential_counter: 0, envelope_counter: 0,
+                
+                // Rate-Counter als 15-Bit Up-Counter für Envelope-Freeze-Bug
+                rate_counter: 0, 
+                exponential_counter: 0, 
+                envelope_counter: 0,
+                
                 attack_period: RATE_COUNTER_PERIOD[0],
                 decay_period: RATE_COUNTER_PERIOD[0],
                 sustain_level: 0,
                 release_period: RATE_COUNTER_PERIOD[0],
+                
                 msbRisingEdge: false,
                 envDelay: 0,
-                wrapped: false
+                wrapped: false,
+                floatingLevel: 0
             });
         }
         this.cutoff = 30; this.resonance = 0; this.filterMode = 0; this.masterVol = 0;
@@ -7662,16 +7949,15 @@ export class SIDChip {
 
     updateFilterParameters() {
         let cutoffReg = (this.regs[21] & 7) | (this.regs[22] << 3);
-        let norm = cutoffReg / 2047.0;
-        let thermalCoefficient = 1.0 - (this._temperature - 55.0) * 0.0035;
-
-        // --- PHASE 4: Nichtlineares FET-Polynom (Gemessene Cutoff-Kurve) ---
-        // Statt einem simplen Math.pow nutzen wir ein Polynom 3. Grades, das die reale
-        // analoge Steuerspannungskennlinie der 6581 JFET-Transistoren nachempfindet.
-        // Extrem flacher Anlauf bei tiefen Bässen, exponentieller Schuss in den Höhen!
-        let fetCurve = 30.0 + 250.0 * norm + 8000.0 * (norm * norm) + 8000.0 * (norm * norm * norm);
         
-        this.activeCutoff = fetCurve * thermalCoefficient;
+        // --- ETAPPE 2: 2048-Entry Cutoff LUT ---
+        // Null CPU-Last: Wir lesen den exakten Hertz-Wert direkt aus der LUT aus
+        // und wenden nur noch den thermischen Drift darauf an!
+        let baseCutoff = CUTOFF_LUT[cutoffReg];
+        
+        let thermalCoefficient = 1.0 - (this._temperature - 55.0) * 0.0035;
+        this.activeCutoff = baseCutoff * thermalCoefficient;
+        
         if (this.activeCutoff < 30) this.activeCutoff = 30;
         if (this.activeCutoff > 16000) this.activeCutoff = 16000;
 
@@ -7701,16 +7987,14 @@ export class SIDChip {
             let gate = (ch.ctrl & 1) !== 0;
             let prevGate = (prevCtrl & 1) !== 0;
             
+            // --- ETAPPE 1: ADSR Bug / Immortal Rate Counter ---
+            // Der Rate-Counter wird NIEMALS gelöscht, wenn sich das Gate ändert!
+            // Nur das Status-Flag kippt. Die Rate tickt gnadenlos weiter.
             if (gate !== prevGate) {
-                ch.envDelay = 1;
+                ch.envDelay = 1; // 1-Zyklus ADSR Hardware Pipeline-Delay
                 ch.state = gate ? ENV_ATTACK : ENV_RELEASE;
             }
             ch.prevGate = gate;
-
-            if (ch.ctrl & 8) {
-                ch.phase = 0; 
-                ch.lfsr = 0x7FFFFF;
-            }
 
             if (reg === base + 5) { 
                 ch.attack_period = RATE_COUNTER_PERIOD[val >> 4];
@@ -7750,8 +8034,15 @@ export class SIDChip {
             case ENV_RELEASE: ratePeriod = ch.release_period; break;
         }
 
-        if (ch.rate_counter <= 0) {
-            ch.rate_counter += ratePeriod; 
+        // --- ETAPPE 1: Der 15-Bit Envelope Freeze Bug ---
+        // Der Zähler ist nun ein echter 15-Bit UP-Counter (0 - 32767).
+        // Fällt die neue ratePeriod UNTER den aktuellen ch.rate_counter,
+        // übersieht die Engine den Treffer und friert die Hüllkurve ein,
+        // bis der Zähler nach 32768 Zyklen überläuft (Envelope Freeze)!
+        ch.rate_counter = (ch.rate_counter + 1) & 0x7FFF;
+
+        if (ch.rate_counter === ratePeriod) {
+            ch.rate_counter = 0; 
 
             let expPeriod = 1;
             if (ch.state !== ENV_ATTACK) {
@@ -7815,31 +8106,27 @@ export class SIDChip {
             ch.msbRisingEdge = false;
         }
 
-        let ringMSB = (ch.phase >> 23) & 1;
+        let ringMSB = 0;
         if ((ch.ctrl & 4) !== 0) { 
             let prevIdx = v === 0 ? 2 : v - 1;
             let prevCh = this.voices[prevIdx];
-            ringMSB ^= (prevCh.phase >> 23) & 1;
+            ringMSB = (prevCh.phase >> 23) & 1;
         }
 
-        ch.waveOut8Bit = calculateWaveform8Bit(ch.ctrl, ch.phase, ch.pw, ch.lfsr, ringMSB);
+        ch.waveOut8Bit = calculateWaveform8Bit(ch, ch.ctrl, ch.phase, ch.pw, ch.lfsr, ringMSB);
         ch.env8Bit = ch.envelope_counter;
 
-        // --- PHASE 4: Nichtlinearer DAC Crunch (D/A Wandler Sättigung) ---
-        // Der 6581 DAC ist fehlerhaft. Die Toleranzen im R-2R-Netzwerk beulen
-        // die Lautstärkekurven in der Mitte leicht aus.
-        let envNorm = ch.env8Bit / 255.0;
-        let waveNorm = ch.waveOut8Bit / 255.0;
-
-        // "Bowing" (Verbiegen) der linearen Kennlinie durch eine Parabel-Funktion
-        let envDac = envNorm + 0.15 * envNorm * (1.0 - envNorm);
-        let waveDac = waveNorm + 0.1 * waveNorm * (1.0 - waveNorm);
+        // --- ETAPPE 2: 256-Entry DAC LUT ---
+        // Statt fehleranfälliger Mathematik holen wir uns die physikalischen,
+        // bitgewichteten Ausgangswerte direkt aus der generierten 6581 R-2R Leiter-Tabelle!
+        let envDac = DAC_LUT[ch.env8Bit];
+        let waveDac = DAC_LUT[ch.waveOut8Bit];
 
         let waveOutFloat = (waveDac * 2.0) - 1.0;
         return waveOutFloat * envDac;
     }
 
-    clock() {
+      clock() {
         for (let v = 0; v < 3; v++) {
             this.clockEnvelopeOneCycle(v);
         }
@@ -7875,16 +8162,20 @@ export class SIDChip {
         
         this.filterLow = lp;
         
+        // --- PHASE 3: JFET EVEN-ORDER HARMONICS (Die dunkle Magie) ---
         if (this.useJfetSaturation) {
-            // --- PHASE 4: Asymmetrisches JFET Clipping ---
-            // Simuliert die ungleichen positiven/negativen Spannungsabfälle des echten Operationsverstärkers.
-            // Positives Signal (oben) clippt hart und früh. Negatives (unten) weich und spät.
-            // Generiert warme, analoge Even-Harmonics.
-            if (bp > 0) {
-                this.filterBand = Math.tanh(bp / 2.0) * 2.0; 
-            } else {
-                this.filterBand = Math.tanh(bp / 3.0) * 3.0; 
-            }
+            // 1. Asymmetrisches Soft-Clipping (Positiv clippt härter als negativ)
+            let b = bp;
+            if (b > 0) b = Math.tanh(b / 1.5) * 1.5; 
+            else b = Math.tanh(b / 4.0) * 4.0;
+            
+            // 2. Erzeugung von geradzahligen Obertönen (Even Harmonics)
+            // Das Quadrat (bp * bp) addiert eine asymmetrische Delle in die Welle.
+            // Dies erzeugt warme "Röhren"-Sättigung und einen massiven DC-Offset, 
+            // den der nachfolgende DCBlocker im Worklet souverän wieder ausbügelt!
+            b += 0.12 * bp * bp; 
+            
+            this.filterBand = b;
         } else {
             this.filterBand = bp / (1.0 + Math.abs(bp) * 0.15); 
         }
@@ -7907,37 +8198,112 @@ export class SIDChip {
         this.outputSample = (finalMix * this.masterVol) + dcLeakage;
     }
 }
+===== ./js/worklets/lib/sid-luts.js =====
+// === js/worklets/lib/sid-luts.js ===
+// =========================================================
+// MOS 6581 HARDWARE LOOKUP TABLES (LUTs)
+// Pre-computed physical anomalies, bit-weight errors & non-linear curves
+// =========================================================
+
+export const DAC_LUT = new Float32Array(256);
+export const CUTOFF_LUT = new Float32Array(2048);
+export const PWM_LUT = new Uint16Array(4096);
+
+// 1. GENERATE 6581 DAC CURVE (256 Entries)
+// Simuliert die fehlerhaften Widerstände des analogen R-2R Leiter-Netzwerks auf dem Die.
+// Anstatt einer reinen Parabel gewichten wir jedes Bit mit winzigen Hardware-Toleranzen.
+const bitWeights = [
+    1.00,   // Bit 0
+    2.01,   // Bit 1
+    3.98,   // Bit 2
+    8.05,   // Bit 3
+    15.90,  // Bit 4
+    32.15,  // Bit 5
+    63.70,  // Bit 6
+    128.50  // Bit 7
+];
+let maxWeight = 0;
+for (let b of bitWeights) maxWeight += b;
+
+for (let i = 0; i < 256; i++) {
+    let sum = 0;
+    for (let b = 0; b < 8; b++) {
+        if (i & (1 << b)) sum += bitWeights[b];
+    }
+    let v = sum / maxWeight;
+    // Zusätzlich: Der charakteristische, leichte Bowing-Effekt des Ausgangsverstärkers
+    DAC_LUT[i] = v + 0.12 * v * (1.0 - v);
+}
+
+// 2. GENERATE 6581 FILTER CUTOFF CURVE (2048 Entries)
+// Bildet die gemessene, krumme FET-Kennlinie des originalen Filters nach:
+// Flaches Plateau -> harter Knick -> massiver Sprung -> Sättigung im High-End
+for (let i = 0; i < 2048; i++) {
+    let norm = i / 2047.0;
+    let hz;
+    
+    if (norm < 0.2) {
+        hz = 30.0 + norm * 500.0; // Flat start (Plateau)
+    } else if (norm < 0.6) {
+        hz = 130.0 + Math.pow((norm - 0.2) / 0.4, 2.0) * 3000.0; // Sharp knee (Knick)
+    } else if (norm < 0.9) {
+        hz = 3130.0 + Math.pow((norm - 0.6) / 0.3, 1.5) * 8000.0; // Jump (Sprung)
+    } else {
+        hz = 11130.0 + ((norm - 0.9) / 0.1) * 4870.0; // Saturation (Top end)
+    }
+    
+    if (hz < 30) hz = 30;
+    if (hz > 16000) hz = 16000;
+    CUTOFF_LUT[i] = hz;
+}
+
+// 3. GENERATE PWM COMPARATOR OFFSET (4096 Entries)
+// Der analoge Komparator des 6581 ist asymmetrisch. Eine programmierte 50% Pulswelle (0x800)
+// ist in der Hardware leicht verschoben, was Sweeps charakteristisch unrund macht.
+for (let i = 0; i < 4096; i++) {
+    // Hardware DC-Offset von ca. 1.8% in die Vergleichslogik injizieren
+    let shifted = i + 76; 
+    if (shifted > 4095) shifted = 4095;
+    PWM_LUT[i] = shifted;
+}
 ===== ./js/worklets/lib/sid-waveforms.js =====
 // === js/worklets/lib/sid-waveforms.js ===
 // =========================================================
 // MOS 6581 WAVEFORM GENERATOR & BIT-LOGIC
-// Hardware-accurate 8-Bit DAC quantization & Floating DC Bias
+// Phase 3 (Dark Magic): Illegal Opcodes & Analog Wire-Shorts Matrix
 // =========================================================
 
-export function calculateWaveform8Bit(ctrl, phase24, pw12, lfsr23, ringMSB) {
+import { PWM_LUT } from './sid-luts.js';
+
+export function calculateWaveform8Bit(ch, ctrl, phase24, pw12, lfsr23, ringMSB) {
     let out = 0xFF; 
     let hasWave = false;
 
-    if (ctrl & 16) {
+    // 1. Die vier Basis-Wellenformen (Hardware-Quantisiert)
+    if (ctrl & 16) { 
+        let bit23 = (phase24 >> 23) & 1;
+        if (ctrl & 4) bit23 ^= ringMSB;
+
         let tri12 = (phase24 >> 11) & 0xFFF;
-        if (ringMSB) tri12 = (~tri12) & 0xFFF;
+        if (bit23) tri12 = (~tri12) & 0xFFF;
+        
         out &= (tri12 >> 4);
         hasWave = true;
     }
 
-    if (ctrl & 32) {
+    if (ctrl & 32) { 
         out &= (phase24 >> 16) & 0xFF;
         hasWave = true;
     }
 
-    if (ctrl & 64) {
+    if (ctrl & 64) { 
         let testPhase = (phase24 >> 12) & 0xFFF;
-        let pulseOut = (testPhase <= pw12) ? 0xFF : 0x00;
-        out &= pulseOut;
+        let effectivePw = PWM_LUT[pw12];
+        out &= (testPhase <= effectivePw) ? 0xFF : 0x00;
         hasWave = true;
     }
 
-    if (ctrl & 128) {
+    if (ctrl & 128) { 
         let noiseOut = ((lfsr23 & 0x400000) >> 15) | 
                        ((lfsr23 & 0x100000) >> 14) | 
                        ((lfsr23 & 0x010000) >> 11) | 
@@ -7950,11 +8316,34 @@ export function calculateWaveform8Bit(ctrl, phase24, pw12, lfsr23, ringMSB) {
         hasWave = true;
     }
 
-    // --- PHASE 4: Floating DAC DC-Bias ---
-    // Wenn keine Welle selektiert ist, fällt der originale SID nicht auf absolute Null ab.
-    // Die analogen DAC-Gatter "floaten" und erzeugen eine permanente Restgleichspannung (DC Offset).
-    if (!hasWave) {
-        return 0x18; // Simulierter Leckstrom der offenen Gates
+    // --- PHASE 3: ILLEGAL OPCODES (ANALOG DIE SHORTS) ---
+    // Wenn mehrere Wellen kombiniert werden, entsteht ein physischer Kurzschluss.
+    // Die schwächeren Pull-Up-Widerstände kollabieren, die Amplitude bricht ein
+    // und erzeugt einen spezifischen Gleichspannungs-Sprung (DC-Offset).
+    if (hasWave) {
+        let waveCombine = ctrl & 0x70; // Filtert Tri (16), Saw (32), Pulse (64)
+        
+        if (waveCombine === 0x30) { // Tri + Saw
+            // Amplitude bricht stark ein, Signal driftet nach oben
+            out = (out >> 1) + 0x18; 
+        } 
+        else if (waveCombine === 0x50) { // Tri + Pulse
+            // Dreieck wird vom Puls massiv verzerrt und gestaucht
+            out = (out >> 1) + 0x20;
+        } 
+        else if (waveCombine === 0x60) { // Saw + Pulse
+            out = (out >> 1) + 0x10;
+        } 
+        else if (waveCombine === 0x70) { // Tri + Saw + Pulse
+            // Totaler Kurzschluss: Signal flacht fast komplett ab (extrem leise)
+            out = (out >> 2) + 0x28;
+        }
+
+        ch.floatingLevel = out;
+    } else {
+        // Floating DAC: Zieht sich langsam in Richtung 0x18 Leckstrom
+        ch.floatingLevel += (0x18 - ch.floatingLevel) * 0.0002;
+        out = Math.round(ch.floatingLevel);
     }
 
     return out;
