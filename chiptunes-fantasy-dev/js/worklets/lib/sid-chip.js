@@ -1,17 +1,16 @@
 // === js/worklets/lib/sid-chip.js ===
 // ==========================================
 // MOS Technology SID 6581 Sound Chip Emulation
-// Phase 1: MSB-Flanken Sync, ADSR Pipeline Bugs & VCA DC-Leakage (PCM Hack)
+// Phase 2: Decoupled 8-Bit Waveform Logic & Hardware Quantization
 // ==========================================
+
+import { calculateWaveform8Bit } from './sid-waveforms.js'; // --- NEU: Externer Import ---
 
 const ENV_ATTACK = 0, ENV_DECAY = 1, ENV_SUSTAIN = 2, ENV_RELEASE = 3;
 
 const RATE_COUNTER_PERIOD = [
     9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19530, 31256
 ];
-
-const PHASE_SCALE = 1.0 / 16777216.0;
-const PHASE23_SCALE = 1.0 / 8388608.0;
 
 export class SIDChip {
     constructor() {
@@ -28,7 +27,6 @@ export class SIDChip {
                 sustain_level: 0,
                 release_period: RATE_COUNTER_PERIOD[0],
                 
-                // --- PHASE 1: MSB Sync & ADSR Delay ---
                 msbRisingEdge: false,
                 envDelay: 0
             });
@@ -85,9 +83,6 @@ export class SIDChip {
             let gate = (ch.ctrl & 1) !== 0;
             let prevGate = (prevCtrl & 1) !== 0;
             
-            // --- PHASE 1: ADSR Pipeline Delay Bug ---
-            // Wenn das Gate-Bit umschlägt, friert die ADSR-Logik für 1 Zyklus ein, 
-            // während der Zustand verarbeitet wird. Rate-Counter wird NICHT resetet!
             if (gate !== prevGate) {
                 ch.envDelay = 1;
                 ch.state = gate ? ENV_ATTACK : ENV_RELEASE;
@@ -120,7 +115,6 @@ export class SIDChip {
     clockEnvelopeOneCycle(v) {
         let ch = this.voices[v];
 
-        // --- PHASE 1: ADSR Delay Bug ---
         if (ch.envDelay > 0) {
             ch.envDelay--;
             return;
@@ -187,8 +181,6 @@ export class SIDChip {
             let oldAcc = ch.phase;
             let newAcc = (ch.phase + ch.freq) & 0xFFFFFF;
 
-            // --- PHASE 1: MSB Flanken-Sync ---
-            // Der SID synchronisiert nur dann, wenn Bit 23 von 0 auf 1 springt
             let prevIdx = v === 0 ? 2 : v - 1;
             let prevCh = this.voices[prevIdx];
 
@@ -196,7 +188,6 @@ export class SIDChip {
                 newAcc = 0;
             }
 
-            // Flag für die nächste Stimme speichern
             ch.msbRisingEdge = ((oldAcc & 0x800000) === 0) && ((newAcc & 0x800000) !== 0);
             ch.phase = newAcc;
 
@@ -210,7 +201,6 @@ export class SIDChip {
             ch.msbRisingEdge = false;
         }
 
-        let phaseFloat = ch.phase * PHASE_SCALE;
         let ringMSB = (ch.phase >> 23) & 1;
         if ((ch.ctrl & 4) !== 0) { 
             let prevIdx = v === 0 ? 2 : v - 1;
@@ -218,68 +208,14 @@ export class SIDChip {
             ringMSB ^= (prevCh.phase >> 23) & 1;
         }
 
-        let phase23 = ch.phase & 0x7FFFFF;
-        let tri = (ringMSB === 0) ? (phase23 * PHASE23_SCALE) : ((0x7FFFFF - phase23) * PHASE23_SCALE);
-        
-        let saw = 1.0 - phaseFloat;
-        let pulseHigh = (ch.phase >> 12) <= ch.pw; 
-        let noiseHigh = ((ch.lfsr >> 22) & 1) === 1;
-
-        let waveOutVal = 0;
-        let hasWave = false;
-
-        let hasTri = (ch.ctrl & 16) !== 0;
-        let hasSaw = (ch.ctrl & 32) !== 0;
-        let hasPulse = (ch.ctrl & 64) !== 0;
-        let hasNoise = (ch.ctrl & 128) !== 0;
-
-        // (Phase 2 & 3: Illegal Waveforms und Noise LUTs folgen im nächsten Schritt!)
-        if (hasTri && hasSaw && hasPulse) {
-            let trisaw = tri * saw * 1.4;
-            if (trisaw > 1.0) trisaw = 1.0;
-            waveOutVal = pulseHigh ? (trisaw * 0.78 + 0.22) : (trisaw * 0.12);
-            hasWave = true;
-        } else if (hasTri && hasSaw) {
-            let val = tri * saw * 1.4;
-            if (val > 1.0) val = 1.0;
-            waveOutVal = val;
-            hasWave = true;
-        } else if (hasTri && hasPulse) {
-            waveOutVal = pulseHigh ? (tri * 0.78 + 0.22) : (tri * 0.12);
-            hasWave = true;
-        } else if (hasSaw && hasPulse) {
-            waveOutVal = pulseHigh ? (saw * 0.78 + 0.22) : (saw * 0.12);
-            hasWave = true;
-        } else if (hasNoise && (hasTri || hasSaw || hasPulse)) {
-            let carrier = 1.0;
-            if (hasTri) carrier = tri;
-            else if (hasSaw) carrier = saw;
-            else if (hasPulse) carrier = pulseHigh ? 1.0 : 0.0;
-            
-            waveOutVal = noiseHigh ? (carrier * 0.78 + 0.22) : (carrier * 0.12);
-            hasWave = true;
-        } else {
-            if (hasTri) {
-                waveOutVal = tri;
-                hasWave = true;
-            } else if (hasSaw) {
-                waveOutVal = saw;
-                hasWave = true;
-            } else if (hasPulse) {
-                waveOutVal = pulseHigh ? 1.0 : 0.0;
-                hasWave = true;
-            } else if (hasNoise) {
-                waveOutVal = ((ch.lfsr >> 15) & 0xFF) / 255.0; 
-                hasWave = true;
-            }
-        }
-
-        if (!hasWave) waveOutVal = 0.0; 
-
-        ch.waveOut8Bit = Math.floor(waveOutVal * 255);
+        // --- PHASE 2: SAUBERER ARCHITEKTUR-AUFRUF ---
+        // Die gesamte unsaubere Float-Mathematik ist verschwunden. 
+        // Wir holen uns den bitgenauen 8-Bit-Abgriff aus dem neuen Waveform-Modul!
+        ch.waveOut8Bit = calculateWaveform8Bit(ch.ctrl, ch.phase, ch.pw, ch.lfsr, ringMSB);
         ch.env8Bit = ch.envelope_counter;
 
-        let waveOutFloat = (waveOutVal * 2.0) - 1.0;
+        // Bipolare Umrechnung (-1.0 bis 1.0) multipliziert mit ADSR-Level
+        let waveOutFloat = (ch.waveOut8Bit / 127.5) - 1.0;
         return waveOutFloat * (ch.envelope_counter / 255.0);
     }
 
@@ -339,13 +275,7 @@ export class SIDChip {
         let filteredMix = filterOut + leakage;
         let finalMix = (unfilteredSum + filteredMix) / 3.0;
 
-        // --- PHASE 1: DIGITAL PCM SAMPLE HACK (Martin Galway) ---
-        // Der 4-Bit Master-Lautstärkeregler des SID ist eigentlich ein VCA-DAC mit starkem DC-Leakage.
-        // Wenn die Voices stumm sind und die CPU dieses Register schnell ändert,
-        // entsteht eine Gleichspannungsschwankung (DC Offset), die als PCM-Tonsignal hörbar wird.
-        // Unser nachgeschalteter DCBlocker im Worklet wandelt diese Stufe in feines 4-Bit Audio um.
         let dcLeakage = (this.masterVol - 0.5) * 1.5;
-
         this.outputSample = (finalMix * this.masterVol) + dcLeakage;
     }
 }
