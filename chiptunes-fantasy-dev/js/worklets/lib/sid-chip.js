@@ -1,16 +1,13 @@
 // === js/worklets/lib/sid-chip.js ===
 // ==========================================
 // MOS Technology SID 6581 Sound Chip Emulation
-// Phase 2: Decoupled 8-Bit Waveform Logic & Hardware Quantization
+// Phase 3: LFSR Noise Physics, 8-Bit DAC & Wire-AND
 // ==========================================
 
-import { calculateWaveform8Bit } from './sid-waveforms.js'; // --- NEU: Externer Import ---
+import { calculateWaveform8Bit } from './sid-waveforms.js';
 
 const ENV_ATTACK = 0, ENV_DECAY = 1, ENV_SUSTAIN = 2, ENV_RELEASE = 3;
-
-const RATE_COUNTER_PERIOD = [
-    9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19530, 31256
-];
+const RATE_COUNTER_PERIOD = [9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19530, 31256];
 
 export class SIDChip {
     constructor() {
@@ -26,9 +23,9 @@ export class SIDChip {
                 decay_period: RATE_COUNTER_PERIOD[0],
                 sustain_level: 0,
                 release_period: RATE_COUNTER_PERIOD[0],
-                
                 msbRisingEdge: false,
-                envDelay: 0
+                envDelay: 0,
+                wrapped: false
             });
         }
         this.cutoff = 30; this.resonance = 0; this.filterMode = 0; this.masterVol = 0;
@@ -89,6 +86,7 @@ export class SIDChip {
             }
             ch.prevGate = gate;
 
+            // --- PHASE 3: Noise Reset über das Test-Bit ---
             if (ch.ctrl & 8) {
                 ch.phase = 0; 
                 ch.lfsr = 0x7FFFFF;
@@ -176,24 +174,33 @@ export class SIDChip {
 
     synthesizeVoiceOneCycle(v) {
         let ch = this.voices[v];
+        ch.wrapped = false;
 
+        // Wenn das Test-Bit gesetzt ist, friert der Oszillator auf 0 ein
         if ((ch.ctrl & 8) === 0) {
             let oldAcc = ch.phase;
             let newAcc = (ch.phase + ch.freq) & 0xFFFFFF;
 
+            if (newAcc < oldAcc) {
+                ch.wrapped = true;
+            }
+
             let prevIdx = v === 0 ? 2 : v - 1;
             let prevCh = this.voices[prevIdx];
-
-            if ((ch.ctrl & 2) !== 0 && prevCh.msbRisingEdge) {
-                newAcc = 0;
+            if ((ch.ctrl & 2) !== 0 && prevCh.wrapped) {
+                newAcc = 0; 
             }
 
             ch.msbRisingEdge = ((oldAcc & 0x800000) === 0) && ((newAcc & 0x800000) !== 0);
             ch.phase = newAcc;
 
-            let oldStep = (oldAcc >> 19) & 1;
-            let newStep = (ch.phase >> 19) & 1;
-            if (oldStep !== newStep) {
+            // --- PHASE 3: LFSR Clocking an Phase-Rising-Edge gebunden ---
+            // Der Zufallsgenerator taktet sich physikalisch immer dann weiter,
+            // wenn Bit 19 des Akkumulators von 0 auf 1 springt.
+            let oldStep = oldAcc & 0x080000;
+            let newStep = ch.phase & 0x080000;
+            
+            if (!oldStep && newStep) {
                 let bit = ((ch.lfsr >> 22) ^ (ch.lfsr >> 17)) & 1;
                 ch.lfsr = ((ch.lfsr << 1) & 0x7FFFFF) | bit;
             }
@@ -201,6 +208,7 @@ export class SIDChip {
             ch.msbRisingEdge = false;
         }
 
+        // Ringmodulation: XOR-Bit ermitteln
         let ringMSB = (ch.phase >> 23) & 1;
         if ((ch.ctrl & 4) !== 0) { 
             let prevIdx = v === 0 ? 2 : v - 1;
@@ -208,13 +216,11 @@ export class SIDChip {
             ringMSB ^= (prevCh.phase >> 23) & 1;
         }
 
-        // --- PHASE 2: SAUBERER ARCHITEKTUR-AUFRUF ---
-        // Die gesamte unsaubere Float-Mathematik ist verschwunden. 
-        // Wir holen uns den bitgenauen 8-Bit-Abgriff aus dem neuen Waveform-Modul!
+        // --- PHASE 3: Kapselung in externes Waveform-Modul ---
         ch.waveOut8Bit = calculateWaveform8Bit(ch.ctrl, ch.phase, ch.pw, ch.lfsr, ringMSB);
         ch.env8Bit = ch.envelope_counter;
 
-        // Bipolare Umrechnung (-1.0 bis 1.0) multipliziert mit ADSR-Level
+        // Bipolare Skalierung (-1.0 bis 1.0) * ADSR-Level
         let waveOutFloat = (ch.waveOut8Bit / 127.5) - 1.0;
         return waveOutFloat * (ch.envelope_counter / 255.0);
     }
@@ -256,8 +262,10 @@ export class SIDChip {
         this.filterLow = lp;
         
         if (this.useJfetSaturation) {
+            this.filterLow = Math.tanh(lp * 1.05); 
             this.filterBand = Math.tanh(bp / 3.0) * 3.0; 
         } else {
+            this.filterLow = lp;
             this.filterBand = bp / (1.0 + Math.abs(bp) * 0.15); 
         }
         
@@ -275,6 +283,7 @@ export class SIDChip {
         let filteredMix = filterOut + leakage;
         let finalMix = (unfilteredSum + filteredMix) / 3.0;
 
+        // VCA DC-Leakage Hack (Martin Galway PCM)
         let dcLeakage = (this.masterVol - 0.5) * 1.5;
         this.outputSample = (finalMix * this.masterVol) + dcLeakage;
     }
