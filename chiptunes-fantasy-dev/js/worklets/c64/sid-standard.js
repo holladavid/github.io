@@ -11,7 +11,7 @@ import { DCBlocker } from '../lib/dsp-utils.js';
 class SIDProcessor extends AudioWorkletProcessor {
     constructor() {
         super();
-        this.clock = 985248; // PAL C64 Clock
+        this.clock = 985248; 
         this.sid = new SIDChip();
         
         // Deaktiviere die teure analoge JFET-Sättigung für den Standard-Core
@@ -34,8 +34,6 @@ class SIDProcessor extends AudioWorkletProcessor {
 
         this.temperature = 55.0;
         this.cpuCyclesRemaining = 0;
-        
-        // Letztes Sample für das Boxcar Decimation Fallback
         this.lastSampleValue = 0;
         
         this.visualView = new Float32Array(40);
@@ -50,6 +48,12 @@ class SIDProcessor extends AudioWorkletProcessor {
             }
 
             if (msg.isSidFile) {
+                // TIEFE INITIALISIERUNG BEIM NEUEN TRACK
+                this.sid = new SIDChip();
+                this.sid.useJfetSaturation = false;
+                this.sid.temperature = this.temperature;
+                this.cpu = new CPU6502(this.sid);
+
                 this.cpu.reset(msg.loadAddress, msg.c64Code);
                 this.initAddress = msg.initAddress;
                 this.playAddress = msg.playAddress;
@@ -92,7 +96,7 @@ class SIDProcessor extends AudioWorkletProcessor {
                 this.isPlaying = true;
             } else if (msg.type === 'CHANGE_SUBSONG') {
                 this.sid = new SIDChip();
-                this.sid.useJfetSaturation = false; // Sättigung für neuen Subsong deaktiviert halten
+                this.sid.useJfetSaturation = false;
                 this.sid.temperature = this.temperature;
                 this.cpu.sid = this.sid;
                 
@@ -189,7 +193,7 @@ class SIDProcessor extends AudioWorkletProcessor {
                     // 3. Taktgenaue Soundchip-Aktualisierung (bei 985.248 Hz)
                     this.sid.clock();
                     
-                    // Boxcar Akkumulation (Keine Filter-Gleichungen!)
+                    // Boxcar-Akkumulation
                     sampleSum += this.sid.outputSample;
                 }
                 
@@ -234,4 +238,5 @@ class SIDProcessor extends AudioWorkletProcessor {
     }
 }
 
+// --- HIER IST DIE REGISTRIERUNG ---
 registerProcessor('sid-standard-processor', SIDProcessor);

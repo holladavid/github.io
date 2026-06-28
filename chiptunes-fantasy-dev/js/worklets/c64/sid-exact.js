@@ -64,6 +64,11 @@ class SIDProcessor extends AudioWorkletProcessor {
             }
 
             if (msg.isSidFile) {
+                // --- NEU: TIEFES HARDWARE-CLEANUP BEIM NEUEN SONG ---
+                this.sid = new SIDChip(); 
+                this.sid.temperature = this.temperature;
+                this.cpu = new CPU6502(this.sid);
+                
                 this.cpu.reset(msg.loadAddress, msg.c64Code);
                 this.initAddress = msg.initAddress;
                 this.playAddress = msg.playAddress;

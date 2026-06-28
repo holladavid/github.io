@@ -1,18 +1,17 @@
 // === js/worklets/lib/sid-chip.js ===
 // ==========================================
 // MOS Technology SID 6581 Sound Chip Emulation
-// Fully Accurate Phase Sync, Ring Modulation & Voice 3 Muting
+// Ultimate Analog Dirt: Resonance Degradation, True Ring-Mod & Correct PWM Polarity
 // ==========================================
 
 const ENV_ATTACK = 0, ENV_DECAY = 1, ENV_SUSTAIN = 2, ENV_RELEASE = 3;
 
-// Offizielle Hardware-Ratenperioden des SIDs in echten CPU-Zyklen
 const RATE_COUNTER_PERIOD = [
     9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19530, 31256
 ];
 
-// JIT-Optimierung: Pre-computed reziproker Teiler für den 24-Bit Akkumulator (Division zu Multiplikation)
 const PHASE_SCALE = 1.0 / 16777216.0;
+const PHASE23_SCALE = 1.0 / 8388608.0;
 
 export class SIDChip {
     constructor() {
@@ -24,14 +23,10 @@ export class SIDChip {
                 state: ENV_RELEASE, prevGate: false,
                 waveOut8Bit: 0, env8Bit: 0, lfsr: 0x7FFFFF,
                 rate_counter: 0, exponential_counter: 0, envelope_counter: 0,
-                
-                // Vorberechneter Hüllkurven-Cache zur Entlastung des 1-MHz-Loops
                 attack_period: RATE_COUNTER_PERIOD[0],
                 decay_period: RATE_COUNTER_PERIOD[0],
                 sustain_level: 0,
                 release_period: RATE_COUNTER_PERIOD[0],
-                
-                // Tracking für Hard-Synchronization (Bit 1)
                 wrapped: false
             });
         }
@@ -41,13 +36,12 @@ export class SIDChip {
         this.outputSample = 0;
         this.useJfetSaturation = true; 
         
-        // Vorberechnete Filterkoeffizienten
         this.g = 0;
         this.q = 1.0;
+        this.activeCutoff = 30.0;
         this.updateFilterParameters();
     }
 
-    // Getter/Setter für Temperatur, die automatisch die Filterkoeffizienten nachberechnet
     get temperature() {
         return this._temperature;
     }
@@ -56,18 +50,16 @@ export class SIDChip {
         this.updateFilterParameters();
     }
 
-    // Errechnet Filter-Parameter vorab, um die CPU-Intensität im clock() Loop um 99% zu senken
     updateFilterParameters() {
         let cutoffReg = (this.regs[21] & 7) | (this.regs[22] << 3);
         let norm = cutoffReg / 2047.0;
         
         let thermalCoefficient = 1.0 - (this._temperature - 55.0) * 0.0035;
-        let activeCutoff = (220.0 + Math.pow(norm, 1.4) * 11500.0) * thermalCoefficient;
-        if (activeCutoff < 30) activeCutoff = 30;
-        if (activeCutoff > 16000) activeCutoff = 16000;
+        this.activeCutoff = (30.0 + Math.pow(norm, 1.4) * 11500.0) * thermalCoefficient;
+        if (this.activeCutoff < 30) this.activeCutoff = 30;
+        if (this.activeCutoff > 16000) this.activeCutoff = 16000;
 
-        // g-Parameter bei nativem 985.248 Hz Takt vorab teilen
-        this.g = Math.PI * activeCutoff / 985248;
+        this.g = Math.PI * this.activeCutoff / 985248;
         
         let resReg = this.regs[23] >> 4;
         let normRes = resReg / 15.0;
@@ -80,7 +72,7 @@ export class SIDChip {
         if (reg >= 29) return;
         this.regs[reg] = val;
         
-        let vIdx = (reg / 7) | 0; // Bitweise Division für schnellere Ganzzahlermittlung
+        let vIdx = (reg / 7) | 0;
         if (vIdx < 3) {
             let ch = this.voices[vIdx];
             let base = vIdx * 7;
@@ -102,11 +94,10 @@ export class SIDChip {
                 ch.lfsr = 0x7FFFFF;
             }
 
-            // ADSR Cache aktualisieren, sobald Register geschrieben werden
-            if (reg === base + 5) { // AD Register
+            if (reg === base + 5) { 
                 ch.attack_period = RATE_COUNTER_PERIOD[val >> 4];
                 ch.decay_period = RATE_COUNTER_PERIOD[val & 15];
-            } else if (reg === base + 6) { // SR Register
+            } else if (reg === base + 6) { 
                 ch.sustain_level = (val >> 4) | ((val >> 4) << 4);
                 ch.release_period = RATE_COUNTER_PERIOD[val & 15];
             }
@@ -185,19 +176,16 @@ export class SIDChip {
             let oldAcc = ch.phase;
             ch.phase = (ch.phase + ch.freq) & 0xFFFFFF;
             
-            // Überlauf (Wrap-Around) für Hard-Synchronization detektieren
             if (ch.phase < oldAcc) {
                 ch.wrapped = true;
             }
 
-            // Hard-Synchronization (Bit 1) mit der vorherigen Stimme
             let prevIdx = v === 0 ? 2 : v - 1;
             let prevCh = this.voices[prevIdx];
             if ((ch.ctrl & 2) !== 0 && prevCh.wrapped) {
-                ch.phase = 0; // Phase der synchronisierten Stimme nullen
+                ch.phase = 0; 
             }
 
-            // LFSR Noise Shift
             let oldStep = (oldAcc >> 19) & 1;
             let newStep = (ch.phase >> 19) & 1;
             if (oldStep !== newStep) {
@@ -208,8 +196,7 @@ export class SIDChip {
 
         let phaseFloat = ch.phase * PHASE_SCALE;
 
-        // --- NEU: Ring-Modulation (Bit 2) ---
-        // Das MSB des Dreiecks-Oszillators wird mit dem MSB des Träger-Oszillators XOR-verknüpft
+        // --- FIX: Echte 23-Bit Ring-Modulation (Das Glöckchen) ---
         let ringMSB = (ch.phase >> 23) & 1;
         if ((ch.ctrl & 4) !== 0) { 
             let prevIdx = v === 0 ? 2 : v - 1;
@@ -217,9 +204,14 @@ export class SIDChip {
             ringMSB ^= (prevCh.phase >> 23) & 1;
         }
 
-        let tri = (ringMSB === 0) ? phaseFloat * 2.0 : (1.0 - phaseFloat) * 2.0;
+        let phase23 = ch.phase & 0x7FFFFF;
+        let tri = (ringMSB === 0) ? (phase23 * PHASE23_SCALE) : ((0x7FFFFF - phase23) * PHASE23_SCALE);
+        
         let saw = 1.0 - phaseFloat;
-        let pulseHigh = (ch.phase >> 12) > ch.pw; 
+        
+        // --- FIX: Korrekte PWM-Polarität (<= anstatt >) ---
+        let pulseHigh = (ch.phase >> 12) <= ch.pw; 
+        
         let noiseHigh = ((ch.lfsr >> 22) & 1) === 1;
 
         let waveOutVal = 0;
@@ -284,54 +276,60 @@ export class SIDChip {
             this.clockEnvelopeOneCycle(v);
         }
 
-        let mix = 0;
-        let g = this.g;
-        let q = this.q;
+        let voice0 = this.synthesizeVoiceOneCycle(0);
+        let voice1 = this.synthesizeVoiceOneCycle(1);
+        let voice2 = this.synthesizeVoiceOneCycle(2);
 
-        for (let v = 0; v < 3; v++) {
-            let voiceOut = this.synthesizeVoiceOneCycle(v);
-            
-            let isFiltered = (this.regs[23] & (1 << v)) !== 0;
+        let filteredSum = 0;
+        let unfilteredSum = 0;
+        
+        // --- FIX: Absolute Stummschaltung von Voice 3 ---
+        const isVoice3Off = (this.filterMode & 128) !== 0;
 
-            if (isFiltered) {
-                // 1-MHz-stabilisierter Bilinearer SVF Solver mit vorbereiteten Koeffizienten
-                let h = voiceOut - this.filterLow;
-                let hp = (h - q * this.filterBand) / (1.0 + g * (g + q));
-                let bp = this.filterBand + g * hp;
-                let lp = this.filterLow + g * bp;
-                
-                this.filterLow = lp;
-                
-                if (this.useJfetSaturation) {
-                    this.filterBand = Math.tanh(bp * 1.2) / 1.2; 
-                } else {
-                    this.filterBand = bp / (1.0 + Math.abs(bp) * 0.15); 
-                }
-                
-                if (this.filterBand > 3.0) this.filterBand = 3.0;
-                if (this.filterBand < -3.0) this.filterBand = -3.0;
-                if (this.filterLow > 3.0) this.filterLow = 3.0;
-                if (this.filterLow < -3.0) this.filterLow = -3.0;
-                
-                let filterOut = 0;
-                if (this.filterMode & 16) filterOut += this.filterLow; 
-                if (this.filterMode & 32) filterOut += this.filterBand; 
-                if (this.filterMode & 64) filterOut += hp; 
-                
-                let leakage = voiceOut * 0.11;
-                voiceOut = filterOut + leakage;
-                mix += voiceOut;
-            } else {
-                // --- NEU: Analoger Voice 3 Off Hardware-Schalter (Mute, Bit 7 in $D418) ---
-                // Blendet die unfiltrierte Modulations-Stimme aus dem Master-Mix aus, damit
-                // LFOs und Pitch-Sweeps auf Voice 3 den Gesamtklang nicht schrill verzerren.
-                const isVoice3Off = (v === 2) && ((this.filterMode & 128) !== 0);
-                if (!isVoice3Off) {
-                    mix += voiceOut;
-                }
-            }
+        if (this.regs[23] & 1) filteredSum += voice0; else unfilteredSum += voice0;
+        if (this.regs[23] & 2) filteredSum += voice1; else unfilteredSum += voice1;
+
+        if (!isVoice3Off) {
+            if (this.regs[23] & 4) filteredSum += voice2; else unfilteredSum += voice2;
         }
 
-        this.outputSample = (mix / 3.0) * this.masterVol;
+        let g = this.g;
+        let q = this.q;
+        
+        // --- FIX: Die analoge Filter-Resonanz-Degradation ---
+        // Auf dem echten MOS 6581 bricht die Resonanz bei Grenzfrequenzen unter ~800 Hz drastisch ein.
+        // Das sorgt dafür, dass tiefe Bässe nicht ewig klingeln/surren, sondern satt und tief klingen.
+        if (this.activeCutoff < 800.0) {
+            let damp = (800.0 - this.activeCutoff) / 800.0; // 0.0 bis 1.0
+            q += damp * 0.55; // Resonanz abschwächen (Q wird größer)
+        }
+
+        let h = filteredSum - this.filterLow;
+        let hp = (h - q * this.filterBand) / (1.0 + g * (g + q));
+        let bp = this.filterBand + g * hp;
+        let lp = this.filterLow + g * bp;
+        
+        this.filterLow = lp;
+        
+        if (this.useJfetSaturation) {
+            this.filterBand = Math.tanh(bp / 3.0) * 3.0; 
+        } else {
+            this.filterBand = bp / (1.0 + Math.abs(bp) * 0.15); 
+        }
+        
+        if (this.filterBand > 4.0) this.filterBand = 4.0;
+        if (this.filterBand < -4.0) this.filterBand = -4.0;
+        if (this.filterLow > 4.0) this.filterLow = 4.0;
+        if (this.filterLow < -4.0) this.filterLow = -4.0;
+
+        let filterOut = 0;
+        if (this.filterMode & 16) filterOut += this.filterLow; 
+        if (this.filterMode & 32) filterOut += this.filterBand; 
+        if (this.filterMode & 64) filterOut += hp; 
+
+        let leakage = filteredSum * 0.11;
+        let filteredMix = filterOut + leakage;
+
+        this.outputSample = ((unfilteredSum + filteredMix) / 3.0) * this.masterVol;
     }
 }
