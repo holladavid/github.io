@@ -1,7 +1,7 @@
 // === js/worklets/lib/sid-waveforms.js ===
 // =========================================================
 // MOS 6581 WAVEFORM GENERATOR & BIT-LOGIC
-// Hardware-accurate 8-Bit DAC quantization, Wire-AND & PWM Asymmetry
+// Phase 3 (Dark Magic): Illegal Opcodes & Analog Wire-Shorts Matrix
 // =========================================================
 
 import { PWM_LUT } from './sid-luts.js';
@@ -10,6 +10,7 @@ export function calculateWaveform8Bit(ch, ctrl, phase24, pw12, lfsr23, ringMSB) 
     let out = 0xFF; 
     let hasWave = false;
 
+    // 1. Die vier Basis-Wellenformen (Hardware-Quantisiert)
     if (ctrl & 16) { 
         let bit23 = (phase24 >> 23) & 1;
         if (ctrl & 4) bit23 ^= ringMSB;
@@ -28,13 +29,8 @@ export function calculateWaveform8Bit(ch, ctrl, phase24, pw12, lfsr23, ringMSB) 
 
     if (ctrl & 64) { 
         let testPhase = (phase24 >> 12) & 0xFFF;
-        
-        // --- ETAPPE 2: Asymmetrischer PWM Komparator ---
-        // Nutzt die LUT, um den DC-Offset des originalen 6581 Komparators abzubilden
         let effectivePw = PWM_LUT[pw12];
-        let pulseOut = (testPhase <= effectivePw) ? 0xFF : 0x00;
-        
-        out &= pulseOut;
+        out &= (testPhase <= effectivePw) ? 0xFF : 0x00;
         hasWave = true;
     }
 
@@ -51,10 +47,33 @@ export function calculateWaveform8Bit(ch, ctrl, phase24, pw12, lfsr23, ringMSB) 
         hasWave = true;
     }
 
+    // --- PHASE 3: ILLEGAL OPCODES (ANALOG DIE SHORTS) ---
+    // Wenn mehrere Wellen kombiniert werden, entsteht ein physischer Kurzschluss.
+    // Die schwächeren Pull-Up-Widerstände kollabieren, die Amplitude bricht ein
+    // und erzeugt einen spezifischen Gleichspannungs-Sprung (DC-Offset).
     if (hasWave) {
+        let waveCombine = ctrl & 0x70; // Filtert Tri (16), Saw (32), Pulse (64)
+        
+        if (waveCombine === 0x30) { // Tri + Saw
+            // Amplitude bricht stark ein, Signal driftet nach oben
+            out = (out >> 1) + 0x18; 
+        } 
+        else if (waveCombine === 0x50) { // Tri + Pulse
+            // Dreieck wird vom Puls massiv verzerrt und gestaucht
+            out = (out >> 1) + 0x20;
+        } 
+        else if (waveCombine === 0x60) { // Saw + Pulse
+            out = (out >> 1) + 0x10;
+        } 
+        else if (waveCombine === 0x70) { // Tri + Saw + Pulse
+            // Totaler Kurzschluss: Signal flacht fast komplett ab (extrem leise)
+            out = (out >> 2) + 0x28;
+        }
+
         ch.floatingLevel = out;
     } else {
-        ch.floatingLevel += (0 - ch.floatingLevel) * 0.0002;
+        // Floating DAC: Zieht sich langsam in Richtung 0x18 Leckstrom
+        ch.floatingLevel += (0x18 - ch.floatingLevel) * 0.0002;
         out = Math.round(ch.floatingLevel);
     }
 

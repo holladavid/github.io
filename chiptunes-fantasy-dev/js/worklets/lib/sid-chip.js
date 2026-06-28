@@ -232,8 +232,8 @@ export class SIDChip {
         let waveOutFloat = (waveDac * 2.0) - 1.0;
         return waveOutFloat * envDac;
     }
-    
-    clock() {
+
+      clock() {
         for (let v = 0; v < 3; v++) {
             this.clockEnvelopeOneCycle(v);
         }
@@ -257,6 +257,11 @@ export class SIDChip {
         let g = this.g;
         let q = this.q;
         
+        if (this.activeCutoff < 800.0) {
+            let damp = (800.0 - this.activeCutoff) / 800.0; 
+            q += damp * 0.55; 
+        }
+
         let h = filteredSum - this.filterLow;
         let hp = (h - q * this.filterBand) / (1.0 + g * (g + q));
         let bp = this.filterBand + g * hp;
@@ -264,12 +269,20 @@ export class SIDChip {
         
         this.filterLow = lp;
         
+        // --- PHASE 3: JFET EVEN-ORDER HARMONICS (Die dunkle Magie) ---
         if (this.useJfetSaturation) {
-            if (bp > 0) {
-                this.filterBand = Math.tanh(bp / 2.0) * 2.0; 
-            } else {
-                this.filterBand = Math.tanh(bp / 3.0) * 3.0; 
-            }
+            // 1. Asymmetrisches Soft-Clipping (Positiv clippt härter als negativ)
+            let b = bp;
+            if (b > 0) b = Math.tanh(b / 1.5) * 1.5; 
+            else b = Math.tanh(b / 4.0) * 4.0;
+            
+            // 2. Erzeugung von geradzahligen Obertönen (Even Harmonics)
+            // Das Quadrat (bp * bp) addiert eine asymmetrische Delle in die Welle.
+            // Dies erzeugt warme "Röhren"-Sättigung und einen massiven DC-Offset, 
+            // den der nachfolgende DCBlocker im Worklet souverän wieder ausbügelt!
+            b += 0.12 * bp * bp; 
+            
+            this.filterBand = b;
         } else {
             this.filterBand = bp / (1.0 + Math.abs(bp) * 0.15); 
         }
