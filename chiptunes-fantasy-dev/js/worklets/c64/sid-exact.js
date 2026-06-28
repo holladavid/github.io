@@ -64,12 +64,13 @@ class SIDProcessor extends AudioWorkletProcessor {
             }
 
             if (msg.isSidFile) {
-                // --- NEU: TIEFES HARDWARE-CLEANUP BEIM NEUEN SONG ---
-                this.sid = new SIDChip(); 
-                this.sid.temperature = this.temperature;
-                this.cpu = new CPU6502(this.sid);
-                
+                // --- NEU: Audio-Pop Cleanup ---
+                this.aaf1_l = 0; this.aaf1_b = 0;
+                this.aaf2_l = 0; this.aaf2_b = 0;
+                this.dcBlock = new DCBlocker();
+
                 this.cpu.reset(msg.loadAddress, msg.c64Code);
+
                 this.initAddress = msg.initAddress;
                 this.playAddress = msg.playAddress;
                 this.isIrqRoutine = false; 
@@ -110,6 +111,11 @@ class SIDProcessor extends AudioWorkletProcessor {
             } else if (msg.type === 'RESUME_TRACK') {
                 this.isPlaying = true;
             } else if (msg.type === 'CHANGE_SUBSONG') {
+                // --- NEU: Audio-Pop Cleanup ---
+                this.aaf1_l = 0; this.aaf1_b = 0;
+                this.aaf2_l = 0; this.aaf2_b = 0;
+                this.dcBlock = new DCBlocker();
+
                 this.sid = new SIDChip();
                 this.sid.useJfetSaturation = true;
                 this.sid.temperature = this.temperature;
