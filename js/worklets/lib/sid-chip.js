@@ -247,19 +247,23 @@ export class SIDChip {
             q += damp * 0.55; 
         }
 
-        let h = filteredSum - this.filterLow;
+let h = filteredSum - this.filterLow;
         let hp = (h - q * this.filterBand) / (1.0 + g * (g + q));
         let bp = this.filterBand + g * hp;
         let lp = this.filterLow + g * bp;
         
         this.filterLow = lp;
         
-        // DEINE PERFEKTE REFERENZ (Löst das Wizball-Ringing!)
+        // =========================================================
+        // DSP UPGRADE (FIXED): STABILE ASYMMETRISCHE SVF-SÄTTIGUNG
+        // =========================================================
         if (this.useJfetSaturation) {
+            // Asymmetrisches Clipping OHNE quadratischen DC-Shift im Integrator!
+            // Wir clippen die negative Halbwelle härter, belassen aber f(0) = 0.
             if (bp > 0) {
-                this.filterBand = Math.tanh(bp / 2.0) * 2.0; 
+                this.filterBand = Math.tanh(bp * 0.8) / 0.8;
             } else {
-                this.filterBand = Math.tanh(bp / 3.0) * 3.0; 
+                this.filterBand = Math.tanh(bp * 1.5) / 1.5;
             }
         } else {
             this.filterBand = bp / (1.0 + Math.abs(bp) * 0.15); 
@@ -278,12 +282,17 @@ export class SIDChip {
         let leakage = filteredSum * 0.11;
         let filteredMix = filterOut + leakage;
 
-        // --- VCA WARMTH (ANALOG GLUE) ---
-        // Anstatt steril durch 3.0 zu teilen, sättigen wir die Summe sanft ab.
-        // Das nimmt dem rohen Rechteck die Kälte und verklebt den Mix druckvoll.
+        // --- VCA WARMTH (ANALOG GLUE & 2ND HARMONICS) ---
         let rawSum = unfilteredSum + filteredMix;
         let vcaIn = rawSum * 0.42; 
-        let finalMix = vcaIn > 0 ? Math.tanh(vcaIn) : Math.tanh(vcaIn * 0.85) / 0.85;
+        
+        // HIER bringen wir den "Growl" sicher unter, da der VCA nicht rückkoppelt!
+        // Leichte quadratische Verzerrung simuliert den Single-Ended Verstärker
+        let vcaQuad = this.useJfetSaturation ? (0.05 * Math.pow(vcaIn, 2)) : 0;
+        
+        let finalMix = vcaIn > 0 
+            ? Math.tanh(vcaIn + vcaQuad) 
+            : Math.tanh(vcaIn * 0.85 + vcaQuad) / 0.85;
 
         let dcLeakage = (this.masterVol - 0.5) * 1.5;
         this.outputSample = (finalMix * this.masterVol) + dcLeakage;
