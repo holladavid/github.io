@@ -11,7 +11,11 @@ export function calculateWaveform8Bit(ctrl, phase24, pw12, lfsr23, ringMSB) {
     // Basis-Wellenformen in 8-Bit berechnen
     let tri = 0xFF, saw = 0xFF, pulse = 0xFF, noise = 0xFF;
 
-    if (ctrl & 16) {
+    // 1. Die vier Basis-Wellenformen (Hardware-Quantisiert)
+    if (ctrl & 16) { 
+        let bit23 = (phase24 >> 23) & 1;
+        if (ctrl & 4) bit23 ^= ringMSB;
+
         let tri12 = (phase24 >> 11) & 0xFFF;
         if (ringMSB) tri12 = (~tri12) & 0xFFF;
         tri = tri12 >> 4;
@@ -23,7 +27,7 @@ export function calculateWaveform8Bit(ctrl, phase24, pw12, lfsr23, ringMSB) {
         hasWave = true;
     }
 
-    if (ctrl & 64) {
+    if (ctrl & 64) { 
         let testPhase = (phase24 >> 12) & 0xFFF;
         pulse = (testPhase <= pw12) ? 0xFF : 0x00;
         hasWave = true;

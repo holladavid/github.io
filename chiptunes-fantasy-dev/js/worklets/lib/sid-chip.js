@@ -20,14 +20,21 @@ export class SIDChip {
                 freq: 0, pw: 2048, ctrl: 0, env: 0, phase: 0,
                 state: ENV_RELEASE, prevGate: false,
                 waveOut8Bit: 0, env8Bit: 0, lfsr: 0x7FFFFF,
-                rate_counter: 0, exponential_counter: 0, envelope_counter: 0,
+                
+                // Rate-Counter als 15-Bit Up-Counter für Envelope-Freeze-Bug
+                rate_counter: 0, 
+                exponential_counter: 0, 
+                envelope_counter: 0,
+                
                 attack_period: RATE_COUNTER_PERIOD[0],
                 decay_period: RATE_COUNTER_PERIOD[0],
                 sustain_level: 0,
                 release_period: RATE_COUNTER_PERIOD[0],
+                
                 msbRisingEdge: false,
                 envDelay: 0,
-                wrapped: false
+                wrapped: false,
+                floatingLevel: 0
             });
         }
         this.cutoff = 30; this.resonance = 0; this.filterMode = 0; this.masterVol = 0;
@@ -50,12 +57,14 @@ export class SIDChip {
 
     updateFilterParameters() {
         let cutoffReg = (this.regs[21] & 7) | (this.regs[22] << 3);
-        let norm = cutoffReg / 2047.0;
+        
+        // --- ETAPPE 2: 2048-Entry Cutoff LUT ---
+        let baseCutoff = CUTOFF_LUT[cutoffReg];
+        
         let thermalCoefficient = 1.0 - (this._temperature - 55.0) * 0.0035;
 
         let fetCurve = 30.0 + 250.0 * norm + 8000.0 * (norm * norm) + 8000.0 * (norm * norm * norm);
         
-        this.activeCutoff = fetCurve * thermalCoefficient;
         if (this.activeCutoff < 30) this.activeCutoff = 30;
         if (this.activeCutoff > 16000) this.activeCutoff = 16000;
 
@@ -103,11 +112,6 @@ export class SIDChip {
             }
             ch.prevGate = gate;
 
-            if (ch.ctrl & 8) {
-                ch.phase = 0; 
-                ch.lfsr = 0x7FFFFF;
-            }
-
             if (reg === base + 5) { 
                 ch.attack_period = RATE_COUNTER_PERIOD[val >> 4];
                 ch.decay_period = RATE_COUNTER_PERIOD[val & 15];
@@ -115,9 +119,7 @@ export class SIDChip {
                 ch.sustain_level = (val >> 4) | ((val >> 4) << 4);
                 ch.release_period = RATE_COUNTER_PERIOD[val & 15];
             }
-        } else if (reg === 21 || reg === 22) {
-            this.updateFilterParameters();
-        } else if (reg === 23) {
+        } else if (reg === 21 || reg === 22 || reg === 23) {
             this.updateFilterParameters();
         } else if (reg === 24) {
             this.filterMode = val;
@@ -187,17 +189,22 @@ export class SIDChip {
     synthesizeVoiceOneCycle(v) {
         let ch = this.voices[v];
 
+        // --- DER TEST BIT FIX ---
+        // Bit 3 (Wert 8) stoppt den Phasengenerator und friert den Status ein.
+        // Er wird nicht auf 0 gesetzt, sondern macht auf Knopfdruck dort weiter, wo er war.
         if ((ch.ctrl & 8) === 0) {
             let oldAcc = ch.phase;
             let newAcc = (ch.phase + ch.freq) & 0xFFFFFF;
 
             let prevIdx = v === 0 ? 2 : v - 1;
             let prevCh = this.voices[prevIdx];
+            // Hard Sync
             if ((ch.ctrl & 2) !== 0 && prevCh.msbRisingEdge) newAcc = 0; 
 
             ch.msbRisingEdge = ((oldAcc & 0x800000) === 0) && ((newAcc & 0x800000) !== 0);
             ch.phase = newAcc;
 
+            // LFSR Noise Generator Shift
             let oldStep = oldAcc & 0x080000;
             let newStep = ch.phase & 0x080000;
             if (!oldStep && newStep) {
@@ -208,14 +215,14 @@ export class SIDChip {
             ch.msbRisingEdge = false;
         }
 
-        let ringMSB = (ch.phase >> 23) & 1;
+        let ringMSB = 0;
         if ((ch.ctrl & 4) !== 0) { 
             let prevIdx = v === 0 ? 2 : v - 1;
             let prevCh = this.voices[prevIdx];
-            ringMSB ^= (prevCh.phase >> 23) & 1;
+            ringMSB = (prevCh.phase >> 23) & 1;
         }
 
-        ch.waveOut8Bit = calculateWaveform8Bit(ch.ctrl, ch.phase, ch.pw, ch.lfsr, ringMSB);
+        ch.waveOut8Bit = calculateWaveform8Bit(ch, ch.ctrl, ch.phase, ch.pw, ch.lfsr, ringMSB);
         ch.env8Bit = ch.envelope_counter;
 
         let envDac = DAC_LUT[ch.env8Bit];
@@ -242,8 +249,10 @@ export class SIDChip {
         if (this.regs[23] & 1) filteredSum += voice0; else unfilteredSum += voice0;
         if (this.regs[23] & 2) filteredSum += voice1; else unfilteredSum += voice1;
 
-        if (!isVoice3Off) {
-            if (this.regs[23] & 4) filteredSum += voice2; else unfilteredSum += voice2;
+        if (this.regs[23] & 4) {
+            filteredSum += voice2;
+        } else if (!isVoice3Off) {
+            unfilteredSum += voice2;
         }
 
         let g = this.g;
@@ -259,7 +268,9 @@ export class SIDChip {
         let bp = this.filterBand + g * hp;
         let lp = this.filterLow + g * bp;
         
+        // SVF STATE VARIABLES MÜSSEN LINEAR BLEIBEN, SONST VERLIERT DER FILTER MASSIV AN ENERGIE!
         this.filterLow = lp;
+        this.filterBand = bp;
         
         if (this.useJfetSaturation) {
             // Stabiles asymmetrisches Clipping ohne Latch-Up
@@ -277,10 +288,29 @@ export class SIDChip {
         if (this.filterLow > 4.0) this.filterLow = 4.0;
         if (this.filterLow < -4.0) this.filterLow = -4.0;
 
+        // 1. Linearen Filter-Output berechnen
         let filterOut = 0;
         if (this.filterMode & 16) filterOut += this.filterLow; 
         if (this.filterMode & 32) filterOut += this.filterBand; 
         if (this.filterMode & 64) filterOut += hp; 
+
+        // --- PHASE 3: JFET EVEN-ORDER HARMONICS (Die dunkle Magie) ---
+        // Sättigung wird NUR auf das endgültige Filter-Signal angewendet (Post-Filter VCA),
+        // so bleibt die mathematische Feedback-Schleife der SVF-Kondensatoren voll intakt!
+        if (this.useJfetSaturation) {
+            // Asymmetrisches Soft-Clipping (Positiv clippt härter als negativ)
+            let b = filterOut;
+            if (b > 0) b = Math.tanh(b / 1.5) * 1.5; 
+            else b = Math.tanh(b / 4.0) * 4.0;
+            
+            // Erzeugung von geradzahligen Obertönen (Even Harmonics)
+            b += 0.12 * filterOut * filterOut; 
+            
+            filterOut = b;
+        } else {
+            // Sehr leichter Soft-Knee für den digitalen "Standard"-Core
+            filterOut = filterOut / (1.0 + Math.abs(filterOut) * 0.15); 
+        }
 
         let leakage = filteredSum * 0.11;
         let filteredMix = filterOut + leakage;
