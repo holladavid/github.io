@@ -67,17 +67,91 @@ body, html {
 }
 
 /* =========================================
-   3. BOOT SCREEN
+   3. BOOT SCREEN (C64 Startup Simulation)
+   ========================================= */
+/* =========================================
+   3. BOOT SCREEN (True C64 Resolution & Border)
    ========================================= */
 #boot-screen {
     display: flex;
     justify-content: center;
     align-items: center;
     height: 100vh;
-    background-color: #000;
-    color: #fff;
+    background-color: #6c5eb5; /* Der echte C64 TV-Rahmen (Light Blue) */
     cursor: pointer;
-    font-size: 14px;
+}
+
+.boot-box {
+    width: 100%;
+    max-width: 900px;
+    height: 100%;
+    max-height: 70vh;
+    background-color: #352879; /* Das Textfenster (Dark Blue) */
+    padding: 8vh 4vw;
+    color: #6c5eb5;
+    font-family: 'Press Start 2P', monospace;
+    text-transform: uppercase;
+    
+    /* Die Magie für die blockige Original-Auflösung:
+       Verhindert Sub-Pixel-Antialiasing und erzwingt harte Kanten */
+    -webkit-font-smoothing: none;
+    font-smooth: never;
+    image-rendering: pixelated;
+    
+    /* Basisgröße muss ein Vielfaches von 8 sein für perfekte Pixel */
+    font-size: 16px; 
+}
+
+.boot-header {
+    text-align: center;
+    margin-bottom: 24px;
+    line-height: 1.6;
+}
+
+.boot-subheader {
+    text-align: center;
+    margin-bottom: 48px;
+    line-height: 1.6;
+}
+
+.boot-logs {
+    text-align: left;
+    margin: 0 auto;
+    width: 100%;
+    max-width: 640px; /* Simuliert die originalen 40-Zeichen Breite */
+    line-height: 1.6;
+}
+
+.boot-logs p {
+    margin: 16px 0;
+}
+
+/* Originaler, dicker Hardware-Cursor */
+.boot-cursor {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    background-color: #6c5eb5;
+    animation: c64-blink 1s steps(2, start) infinite;
+    vertical-align: text-bottom;
+    margin-left: 8px;
+}
+
+@keyframes c64-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+
+/* Auf Desktop-Monitoren die dicken 24px CRT-Pixel simulieren */
+@media (min-width: 800px) {
+    .boot-box {
+        font-size: 24px;
+        padding: 60px 40px;
+    }
+    .boot-cursor {
+        width: 24px;
+        height: 24px;
+    }
 }
 
 /* =========================================
