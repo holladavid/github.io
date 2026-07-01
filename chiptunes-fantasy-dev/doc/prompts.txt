@@ -1,4 +1,0 @@
-Erstelle mir eine Textdatei die alle im Projekt enthaltenen Dateien und Ordner auflistet (nicht den Inhallt der Dateien)
-
-Erstelle mir eine Textdatei mit dem Inhalt aller Dateien vom Typ .js, .json, .html und .css.
-Bevor der Inhalt einer Datei hinzugefügt wird, nenne bitte in einer extra Zeile Pfade+Dateiname.
