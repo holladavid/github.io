@@ -43,7 +43,7 @@ const composerMetadata = {
     `
 };
 
-export const externalModTracks = myModFiles.map((filename, index) => {
+export const amigaPlaylist = myModFiles.map((filename, index) => {
     const isXm = filename.toLowerCase().endsWith('.xm');
     const label = isXm ? "FASTTRACKER" : "PROTRACKER";
     const metaInfo = composerMetadata[filename] || `

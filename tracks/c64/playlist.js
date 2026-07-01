@@ -66,7 +66,7 @@ composerMetadata["Supremacy.sid"] = composerMetadata["Cybernoid_II.sid"];
 composerMetadata["RoboCop_3.sid"] = composerMetadata["Cybernoid_II.sid"];
 composerMetadata["Myth.sid"] = composerMetadata["Cybernoid_II.sid"];
 
-export const externalSidTracks = mySidFiles.map((filename, index) => {
+export const c64Playlist = mySidFiles.map((filename, index) => {
     const metaInfo = composerMetadata[filename] || `
         <h3>[ CLASSIC C64 SID ]</h3>
         <p>Ein historisches C64-Tracker-Dokument. Die kompilierte 6502-Maschinencode-Routine wird in Echtzeit von unserem 1-MHz Lockstep-CPU-Emulator berechnet, während der MOS 6581 Kern die analogen Wellenformen synthetisiert.</p>

@@ -1,14 +1,10 @@
+// === js/visuals/scroller.js ===
 // =========================================================
 // RETRO DOUBLE-SINE TEXT SCROLLER MODULE
 // High-performance canvas rendering with 50Hz aesthetics
+// Retina-Ready & Hard Drop-Shadow Edition
 // =========================================================
 
-/**
- * Initialisiert den doppelwelligen Retro-Text-Scroller auf dem Canvas.
- * 
- * @param {Function} getScrollerText - Closure-Funktion, die den aktuellen dynamischen Song-Text liefert
- * @param {Function} getEcoMode - Closure-Funktion, die den aktiven Pure Audio (ECO) Status liefert
- */
 export function initScroller(getScrollerText, getEcoMode) {
     const canvas = document.getElementById('scroller-canvas');
     if (!canvas) {
@@ -16,69 +12,84 @@ export function initScroller(getScrollerText, getEcoMode) {
         return;
     }
     
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: false });
     
-    // Logische Canvas-Abmessungen an die physikalischen CSS-Grenzen anpassen
-    canvas.width = canvas.clientWidth; 
-    canvas.height = canvas.clientHeight;
+    // =========================================================
+    // DSP & GFX UPGRADE: RETINA / HIGH-DPI SCALING
+    // Verhindert Unschärfe auf modernen Displays (Smartphones, MacBooks)
+    // =========================================================
+    let dpr = window.devicePixelRatio || 1;
 
-    // Canvas-Dimensionen bei Größenänderungen des Browserfensters automatisch anpassen
-    window.addEventListener('resize', () => {
-        canvas.width = canvas.clientWidth;
-        canvas.height = canvas.clientHeight;
-    });
+    function resizeCanvas() {
+        dpr = window.devicePixelRatio || 1;
+        canvas.width = canvas.clientWidth * dpr; 
+        canvas.height = canvas.clientHeight * dpr;
+        
+        // CSS-Größe bleibt gleich, interne Auflösung wird vervielfacht
+        canvas.style.width = `${canvas.clientWidth}px`;
+        canvas.style.height = `${canvas.clientHeight}px`;
+        
+        // Kontext skalieren, damit unsere Berechnungen in CSS-Pixeln bleiben können
+        ctx.scale(dpr, dpr);
+        
+        // Verhindert das Weichzeichnen (Anti-Aliasing) bei Pixelschriften
+        ctx.imageSmoothingEnabled = false;
+    }
+
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
     
     let offset = 0;          
-    const speed = 2.5; // Pixel-Vorschub pro Animations-Frame
+    const speed = 2.5; 
     
-    // Klassische Demoszene-Grüße (Greets), die an das Ende jedes Songtextes gehängt werden
     const baseGreets = " +++ AT LAST, THE ULTIMATE HTML5 MUSIC DISK IS COMPLETE +++ CODE & DSP MAGIK RUNNING AT A SOLID 50 HZ VBLANK +++ DEEP CHIP EMULATION VIA AUDIOWORKLETS +++ NO MP3, NO BULLSHIT, JUST PURE MATHEMATICS +++ GREETS FLY OUT TO ALL THE PIXEL PUSHERS, CYCLE CRUNCHERS AND WAVEFORM WIZARDS OUT THERE +++ TO EVERYONE WHO STILL KEEPS THE SPIRIT OF THE 8-BIT AND 16-BIT ERA ALIVE +++ TO THE TRUE LOVERS OF DEMOSCENE ART AND CHIPTUNE MAGIC +++ LET THE ANALOG FILTERS BURN +++ WRAP AROUND +++ ";
     
     function draw() {
-        // GPU- & CPU-Entlastung: Wenn PURE AUDIO (ECO) aktiv ist, stoppen wir das Rendern vollständig
         if (getEcoMode()) {
             requestAnimationFrame(draw);
             return; 
         }
 
-        // Frame leeren und schwarzen Hintergrund zeichnen
+        const cssWidth = canvas.width / dpr;
+        const cssHeight = canvas.height / dpr;
+
+        // Frame leeren
         ctx.fillStyle = '#000000'; 
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillRect(0, 0, cssWidth, cssHeight);
         
-        // Aktives System-Theme über die DOM-Klassenstruktur ermitteln
         const isAmiga = document.body.classList.contains('theme-amiga');
         const isAtari = document.body.classList.contains('theme-atari');
         
-        // Systemgetreue Farbwahl und Fonts deklarieren
         ctx.fillStyle = isAtari ? '#55ff55' : isAmiga ? '#ff8800' : '#6c5eb5';
         ctx.font = isAmiga || isAtari ? "32px 'VT323', monospace" : "24px 'Press Start 2P', monospace";
         ctx.textBaseline = "middle";
         
-        // VT323-Metrik-Kompensation (zieht die tiefhängende Schrift sachte nach oben, um Clipping zu verhindern)
-        const fontMetricOffset = (isAmiga || isAtari) ? -(canvas.height * 0.08) : 0;
+        // =========================================================
+        // GFX UPGRADE: HARD HARDWARE DROP SHADOW
+        // =========================================================
+        ctx.shadowColor = '#000000';
+        ctx.shadowOffsetX = isAmiga || isAtari ? 2 : 3; // Leicht dickerer Schatten für C64
+        ctx.shadowOffsetY = isAmiga || isAtari ? 2 : 3;
+        ctx.shadowBlur = 0; // Kein Glow, sondern harter 8-Bit-Schatten!
 
-        // Dynamischen Text über den Getter einholen und mit den Greets verschmelzen
+        const fontMetricOffset = (isAmiga || isAtari) ? -(cssHeight * 0.08) : 0;
         const fullText = getScrollerText() + baseGreets;
         const charWidth = ctx.measureText("A").width;
-        let startX = canvas.width - offset;
+        let startX = cssWidth - offset;
         
-        // Durch jeden Buchstaben loopen und Wellenverschiebung berechnen
         for (let i = 0; i < fullText.length; i++) {
             let x = startX + (i * charWidth);
             
-            // Nur Zeichen rendern, die sich aktuell im sichtbaren Viewport-Bereich befinden
-            if (x > -50 && x < canvas.width + 50) {
-                // Mathematische Doppel-Sinus-Auslenkung (auf max 16% und 6% der Canvas-Höhe gedämpft)
-                // Das lässt den Text perfekt zentriert schwingen, ohne oben oder unten anzustoßen
-                let wave1 = Math.sin((x * 0.01) + (offset * 0.04)) * (canvas.height * 0.16);
-                let wave2 = Math.cos((x * 0.02) + (offset * 0.07)) * (canvas.height * 0.06);
+            if (x > -50 && x < cssWidth + 50) {
+                // Mathematische Doppel-Sinus-Auslenkung
+                let wave1 = Math.sin((x * 0.01) + (offset * 0.04)) * (cssHeight * 0.16);
+                let wave2 = Math.cos((x * 0.02) + (offset * 0.07)) * (cssHeight * 0.06);
                 
-                ctx.fillText(fullText[i], x, (canvas.height / 2) + wave1 + wave2 + fontMetricOffset);
+                ctx.fillText(fullText[i], x, (cssHeight / 2) + wave1 + wave2 + fontMetricOffset);
             }
         }
         
-        // Offset zurücksetzen, wenn der Text einmal durchgelaufen ist (Überlaufschutz)
-        offset = (offset + speed) > (charWidth * fullText.length + canvas.width) ? 0 : offset + speed;
+        offset = (offset + speed) > (charWidth * fullText.length + cssWidth) ? 0 : offset + speed;
         requestAnimationFrame(draw);
     }
     

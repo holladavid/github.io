@@ -167,6 +167,7 @@ class PaulaProcessor extends AudioWorkletProcessor {
         this.staticR = new StaticRCFilter(sampleRate);
         this.ledL = new AmigaLEDFilter(sampleRate);
         this.ledR = new AmigaLEDFilter(sampleRate);
+        this.trackLedFilterOn = true;
         this.ledFilterOn = true; 
         this.filterModeState = 0; 
 
@@ -220,6 +221,8 @@ class PaulaProcessor extends AudioWorkletProcessor {
                 }
 
                 this.filterModeState = 0;
+                this.trackLedFilterOn = true; 
+                this.ledFilterOn = true;      
 
                 if (msg.track && msg.track.isSequenced) {
                     this.isSequenced = true;
@@ -270,7 +273,8 @@ class PaulaProcessor extends AudioWorkletProcessor {
                 }
             } else if (msg.type === 'CYCLE_FILTER') {
                 this.filterModeState = (this.filterModeState + 1) % 3;
-                if (this.filterModeState === 1) this.ledFilterOn = true; 
+                if (this.filterModeState === 0) this.ledFilterOn = this.trackLedFilterOn; 
+                else if (this.filterModeState === 1) this.ledFilterOn = true; 
                 else if (this.filterModeState === 2) this.ledFilterOn = false; 
             }
         };
@@ -421,6 +425,7 @@ class PaulaProcessor extends AudioWorkletProcessor {
                         const subEffect = param >> 4;
                         const subParam = param & 0x0F;
                         if (subEffect === 0x00) { 
+                            this.trackLedFilterOn = (subParam === 0);
                             if (this.filterModeState === 0) this.ledFilterOn = (subParam === 0); 
                         } else if (subEffect === 0x08) { 
                             channel.pan = subParam / 15.0;

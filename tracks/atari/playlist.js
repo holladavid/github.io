@@ -83,7 +83,7 @@ const composerMetadata = {
     `
 };
 
-export const externalYmTracks = myYmFiles.map((filename, index) => {
+export const atariPlaylist = myYmFiles.map((filename, index) => {
     const metaInfo = composerMetadata[filename] || `
         <h3>[ CLASSIC ATARI ST YM2149F ]</h3>
         <p>Ein historischer YM-Register-Dump (YM5/YM6). Dieses Format enthält die rohen Hardware-Befehle, die ursprünglich 50-mal pro Sekunde an den Soundchip geschickt wurden, verarbeitet durch unsere zyklengenaue 2MHz-Emulation.</p>
