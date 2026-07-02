@@ -526,12 +526,12 @@ body.theme-atari .tab-btn.active {
     top: 15px;
     left: 20px;
     z-index: 10;
-    pointer-events: none; /* Klicks gehen durch das Logo hindurch */
+    pointer-events: none;
     display: flex;
     flex-direction: column;
     
-    /* Die Schwebe-Animation: Organische Lissajous-Figur (Endlosschleife) */
-    animation: float-logo 4s ease-in-out infinite;
+    /* Sanftes, weiches Schweben (Auf und Ab) */
+    animation: float-logo 3.5s ease-in-out infinite alternate;
 }
 
 .brand-main {
@@ -574,13 +574,9 @@ body.theme-atari .tab-btn.active {
     text-shadow: 0 0 10px var(--text-color), 2px 2px 0px #000000;
 }
 
-/* Lissajous-Kurve: Kombination aus X/Y-Schwingung und leichter Rotation */
 @keyframes float-logo {
-    0%   { transform: translate(0px, 0px) rotate(-1deg); }
-    25%  { transform: translate(4px, 4px) rotate(0deg); }
-    50%  { transform: translate(8px, 0px) rotate(1deg); }
-    75%  { transform: translate(4px, -4px) rotate(0deg); }
-    100% { transform: translate(0px, 0px) rotate(-1deg); }
+    0%   { transform: translateY(0px) rotate(0deg); }
+    100% { transform: translateY(6px) rotate(-1deg); } /* Weiches Absinken mit minimalem Tilt */
 }
 
 /* Copper-Bar Reflection Animation */
@@ -945,7 +941,7 @@ body.eco-mode .brand-main {
         overflow-y: visible !important; 
     }
 
-/* NEU: Sticky Playback-Bar auf dem Handy (iOS Safe!) */
+    /* Sticky Playback-Bar auf dem Handy (iOS Safe!) */
     #playback-bar {
         position: -webkit-sticky; 
         position: sticky;
@@ -1007,13 +1003,19 @@ body.eco-mode .brand-main {
         margin-bottom: 2px;
     }
     
-    /* Logo auf Handys leicht verkleinern */
+    /* Logo auf Handys weiter verkleinern (verhindert Kollision mit C64 HUD) */
     #brand-logo {
         top: 10px;
         left: 10px;
     }
-    .brand-main { font-size: 18px; }
-    .brand-sub { font-size: 9px; letter-spacing: 6px; }  /* Kerning angepasst */
+    .brand-main { 
+        font-size: 14px; 
+        margin-bottom: 6px; /* <-- Erhöht, damit der 3D-Schatten "FANTASY" nicht schluckt */
+    }
+    .brand-sub { 
+        font-size: 7px; 
+        letter-spacing: 5px; 
+    }
 
     /* 3. Das HUD (DSP Matrix) komprimieren */
     #chip-hud {
